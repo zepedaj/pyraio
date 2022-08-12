@@ -16,7 +16,7 @@ def test_speed():
     # FULL_FILE_SIZE
     FILE_PATH = Path("/data/tmp/large_file_3.tmp")
     BLOCK_SIZE = 4096
-    NUM_INDICES = 64000
+    NUM_INDICES = None
     NUM_READERS = 32
 
     size = FILE_PATH.stat().st_size
@@ -24,7 +24,8 @@ def test_speed():
     shuffle(indices)
     indices = indices[:NUM_INDICES]
 
-    fd = os.open(FILE_PATH, os.O_RDONLY)  # | os.O_DIRECT)
+    # fd = os.open(FILE_PATH, os.O_RDONLY)
+    fd = os.open(FILE_PATH, os.O_RDONLY | os.O_DIRECT)
 
     t0 = time()
     data = list(

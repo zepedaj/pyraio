@@ -1,4 +1,4 @@
-cdef extern from "libaio.h":
+cdef extern from "<libaio.h>" nogil:
 
     ctypedef struct io_context:
         pass

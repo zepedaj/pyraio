@@ -1,7 +1,9 @@
 # distutils: language = c++
 
+from cython.view cimport array as cvarray
 from libc.stdio cimport printf
 cimport clibaio
+from aligned_alloc cimport aligned_alloc
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free
@@ -13,7 +15,7 @@ from libcpp cimport bool
 np.import_array()
 
 
-cdef size_t prepare_blocks_to_submit(block_iter, np_bufs, cpp_list[clibaio.iocb *] &unused_blocks, clibaio.iocb **&blocks_to_submit):
+cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unused_blocks, clibaio.iocb **&blocks_to_submit):
 
     cdef bool iter_exhausted = False
     cdef size_t block_k = 0
@@ -31,11 +33,9 @@ cdef size_t prepare_blocks_to_submit(block_iter, np_bufs, cpp_list[clibaio.iocb 
             iter_exhausted = True
             break
 
-        # Prepare new numpy array
-        np_arr = np.empty(num_bytes, dtype=np.uint8)
-        buf_mview = np_arr
-        buf_voidp = &buf_mview[0]
-        np_bufs[<long int>buf_voidp] = np_arr
+        # Prepare new memory
+        #buf_voidp = malloc(num_bytes)
+        buf_voidp = aligned_alloc(512, 512*<size_t>(num_bytes/512) + 512*(num_bytes%512>0))
 
         # Prepare new block
         iocb_p = unused_blocks.front()
@@ -82,8 +82,7 @@ def read_blocks(block_iter, size_t max_events=32):
 
     cdef clibaio.iocb * iocb_p
 
-
-    np_bufs = {}
+    cdef cvarray buf_arr
 
     try:
 
@@ -97,7 +96,7 @@ def read_blocks(block_iter, size_t max_events=32):
         try:
             while True:
                 # Prepare new io requests
-                num_to_submit = prepare_blocks_to_submit(block_iter, np_bufs, unused_blocks, blocks_to_submit)
+                num_to_submit = prepare_blocks_to_submit(block_iter, unused_blocks, blocks_to_submit)
 
                 # Submit new io requests
                 if num_to_submit>0:
@@ -119,9 +118,14 @@ def read_blocks(block_iter, size_t max_events=32):
                 if res<0 or res2 != 0:
                     raise Exception(f'Failed event with res={res} and res2={res2}.')
                 iocb_p = next_completed_event[0].obj
-                buf_id = iocb_p[0].u.c.buf
+                buf_ptr = iocb_p[0].u.c.buf
+                nbytes = iocb_p[0].u.c.nbytes
                 unused_blocks.push_front(iocb_p)
-                yield np_bufs.pop(<long int>buf_id)
+
+                # Convert buffer to numpy object
+                buf_arr = <np.uint8_t[:nbytes]> buf_ptr
+                buf_arr.free_data = True
+                yield buf_arr
 
                 # Move to next event
                 num_completed_events -=1
