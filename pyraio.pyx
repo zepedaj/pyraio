@@ -17,7 +17,6 @@ np.import_array()
 
 cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unused_blocks, clibaio.iocb **&blocks_to_submit):
 
-    cdef bool iter_exhausted = False
     cdef size_t block_k = 0
     cdef char[:] buf_mview
     cdef void * buf_voidp
@@ -26,12 +25,11 @@ cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unuse
     cdef long long offset
 
     # Prepare new io requests
-    while not iter_exhausted and unused_blocks.size()>0:
+    while unused_blocks.size()>0:
         try:
             fd, offset, num_bytes = next(block_iter)
         except StopIteration:
-            iter_exhausted = True
-            break
+            return block_k
 
         # Prepare new memory
         #buf_voidp = malloc(num_bytes)

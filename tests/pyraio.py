@@ -17,7 +17,7 @@ def test_speed():
     FILE_PATH = Path("/data/tmp/large_file_3.tmp")
     BLOCK_SIZE = 4096
     NUM_INDICES = None
-    NUM_READERS = 32
+    NUM_READERS = 16
 
     size = FILE_PATH.stat().st_size
     indices = list(range(0, size, BLOCK_SIZE))
