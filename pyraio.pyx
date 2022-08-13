@@ -14,6 +14,8 @@ from libcpp cimport bool
 
 np.import_array()
 
+cdef size_t ALIGN_BNDRY = 512
+
 
 cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unused_blocks, clibaio.iocb **&blocks_to_submit):
 
@@ -33,7 +35,9 @@ cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unuse
 
         # Prepare new memory
         #buf_voidp = malloc(num_bytes)
-        buf_voidp = aligned_alloc(512, 512*<size_t>(num_bytes/512) + 512*(num_bytes%512>0))
+        buf_voidp = aligned_alloc(
+            ALIGN_BNDRY,
+            ALIGN_BNDRY*<size_t>(num_bytes/ALIGN_BNDRY) + ALIGN_BNDRY*(num_bytes%ALIGN_BNDRY>0))
 
         # Prepare new block
         iocb_p = unused_blocks.front()
@@ -73,10 +77,6 @@ def read_blocks(block_iter, size_t max_events=32):
     cdef cpp_list[clibaio.iocb *] unused_blocks
     cdef clibaio.io_context_t io_ctx
     cdef size_t block_k, num_to_submit
-    cdef bool iter_exhausted=False
-
-    cdef char[:] buf_mview
-    cdef void * buf_voidp
 
     cdef clibaio.iocb * iocb_p
 
@@ -108,6 +108,8 @@ def read_blocks(block_iter, size_t max_events=32):
                 # Get completed requests, if none are available.
                 if num_completed_events == 0:
                     num_completed_events = clibaio.io_getevents(io_ctx, 1, max_events, completed_events, NULL)
+                    if num_completed_events<0:
+                        raise Exception(f'Error occurred when attempting to get events ({num_completed_events}).')
                     next_completed_event = completed_events
 
                 # Yield buffer

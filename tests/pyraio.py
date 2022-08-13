@@ -37,9 +37,3 @@ def test_speed():
     print(
         f"Read {bytes_read} bytes ({len(data)} ios) in {delay} seconds  -- {bytes_read/delay/1e6} MBs | {len(data)/delay} iops."
     )
-
-
-if __name__ == "__main__":
-    main()
-
-    pass
