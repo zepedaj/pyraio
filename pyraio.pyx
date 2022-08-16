@@ -4,6 +4,7 @@ from cython.view cimport array as cvarray
 from libc.stdio cimport printf
 cimport clibaio
 from aligned_alloc cimport aligned_alloc
+from aligned_alloc_extra cimport floor, ceil
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free
@@ -17,14 +18,20 @@ np.import_array()
 cdef size_t ALIGN_BNDRY = 512
 
 
+ctypedef struct buf_meta_t:
+    size_t data_start # Data start position in aligned buffer
+    size_t data_end # Data end position in aligned buffer
+
+
 cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unused_blocks, clibaio.iocb **&blocks_to_submit):
 
     cdef size_t block_k = 0
     cdef char[:] buf_mview
     cdef void * buf_voidp
     cdef int fd
-    cdef size_t num_bytes
-    cdef long long offset
+    cdef size_t num_bytes, aligned_num_bytes
+    cdef long long offset, aligned_offset
+    cdef buf_meta_t *meta_p
 
     # Prepare new io requests
     while unused_blocks.size()>0:
@@ -34,16 +41,23 @@ cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unuse
             return block_k
 
         # Prepare new memory
-        #buf_voidp = malloc(num_bytes)
-        buf_voidp = aligned_alloc(
-            ALIGN_BNDRY,
-            ALIGN_BNDRY*<size_t>(num_bytes/ALIGN_BNDRY) + ALIGN_BNDRY*(num_bytes%ALIGN_BNDRY>0))
+        aligned_offset = floor(ALIGN_BNDRY, offset)
+        aligned_num_bytes = ceil(ALIGN_BNDRY, num_bytes + offset - aligned_offset)
+        buf_voidp = aligned_alloc(ALIGN_BNDRY, aligned_num_bytes)
 
         # Prepare new block
         iocb_p = unused_blocks.front()
+        meta_p = <buf_meta_t *>iocb_p[0].data
         clibaio.io_prep_pread(
-           iocb_p, fd, buf_voidp, num_bytes, offset)
+           iocb_p, fd, buf_voidp, aligned_num_bytes, aligned_offset)
+        iocb_p[0].data = meta_p
         unused_blocks.pop_front()
+
+        # Add block meta data.
+        meta_p[0].data_start = offset - aligned_offset
+        meta_p[0].data_end = offset + num_bytes - aligned_offset
+
+        # Append block
         blocks_to_submit[block_k] = iocb_p
 
         block_k+=1
@@ -53,16 +67,29 @@ cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unuse
 
 def read_blocks(block_iter, size_t max_events=32):
 
+    cdef size_t block_k, num_to_submit
+
     # Create blocks
     cdef clibaio.iocb *blocks_memory
     blocks_memory = <clibaio.iocb *> malloc(max_events * sizeof(clibaio.iocb))
     if not blocks_memory:
         raise MemoryError()
 
+    # Buffer meta memory
+    cdef  buf_meta_t *buf_meta_memory
+    buf_meta_memory = <buf_meta_t *> malloc(max_events * sizeof(buf_meta_t))
+    cdef buf_meta_t block_meta
+    if not blocks_memory:
+        free(blocks_memory)
+        raise MemoryError()
+    for block_k in range(max_events):
+        blocks_memory[block_k].data = buf_meta_memory + block_k
+
     cdef clibaio.iocb **blocks_to_submit
     blocks_to_submit = <clibaio.iocb **> malloc(max_events * sizeof(clibaio.iocb *))
     if not blocks_to_submit:
         free(blocks_memory)
+        free(buf_meta_memory)
         raise MemoryError()
 
     cdef size_t num_completed_events = 0
@@ -71,12 +98,12 @@ def read_blocks(block_iter, size_t max_events=32):
     completed_events = <clibaio.io_event *> malloc(max_events * sizeof(clibaio.io_event))
     if not blocks_to_submit:
         free(blocks_memory)
+        free(buf_meta_memory)
         free(blocks_to_submit)
         raise MemoryError()
 
     cdef cpp_list[clibaio.iocb *] unused_blocks
     cdef clibaio.io_context_t io_ctx
-    cdef size_t block_k, num_to_submit
 
     cdef clibaio.iocb * iocb_p
 
@@ -125,7 +152,8 @@ def read_blocks(block_iter, size_t max_events=32):
                 # Convert buffer to numpy object
                 buf_arr = <np.uint8_t[:nbytes]> buf_ptr
                 buf_arr.free_data = True
-                yield buf_arr
+                block_meta = (<buf_meta_t *>iocb_p[0].data)[0]
+                yield buf_arr[block_meta.data_start:block_meta.data_end]
 
                 # Move to next event
                 num_completed_events -=1
@@ -135,5 +163,6 @@ def read_blocks(block_iter, size_t max_events=32):
             clibaio.io_destroy(io_ctx)
     finally:
         free(blocks_memory)
+        free(buf_meta_memory)
         free(blocks_to_submit)
         free(completed_events)
