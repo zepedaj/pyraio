@@ -147,6 +147,8 @@ def read_blocks(block_iter, size_t max_events=32):
                 iocb_p = next_completed_event[0].obj
                 buf_ptr = iocb_p[0].u.c.buf
                 nbytes = iocb_p[0].u.c.nbytes
+                if res<0 or <unsigned long>res != nbytes:
+                    raise Exception('Failed to read the requested number of bytes!')
                 unused_blocks.push_front(iocb_p)
 
                 # Convert buffer to numpy object
