@@ -47,13 +47,13 @@ cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unuse
 
         # Prepare new block
         iocb_p = unused_blocks.front()
-        meta_p = <buf_meta_t *>iocb_p[0].data
+        meta_p = <buf_meta_t *>iocb_p[0].data # Will be cleared by io_prep_pread -- must read before.
         clibaio.io_prep_pread(
            iocb_p, fd, buf_voidp, aligned_num_bytes, aligned_offset)
-        iocb_p[0].data = meta_p
         unused_blocks.pop_front()
 
         # Add block meta data.
+        iocb_p[0].data = meta_p
         meta_p[0].data_start = offset - aligned_offset
         meta_p[0].data_end = offset + num_bytes - aligned_offset
 
@@ -127,7 +127,7 @@ def read_blocks(block_iter, size_t max_events=32):
                 if num_to_submit>0:
                     num_submitted = <size_t>clibaio.io_submit(io_ctx, num_to_submit, blocks_to_submit)
                     if num_submitted != num_to_submit:
-                        raise Exception(f'Blocks submitted {num_submitted} to not match requested number {num_to_submit}.')
+                        raise Exception(f'Blocks submitted {num_submitted} do not match requested number {num_to_submit}.')
                 elif unused_blocks.size()==max_events:
                     # Finished all computations.
                     return
