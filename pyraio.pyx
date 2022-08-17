@@ -23,6 +23,9 @@ ctypedef struct buf_meta_t:
     size_t data_end # Data end position in aligned buffer
 
 
+cdef void free_aligned(void *ptr):
+    free(<void *>floor(ALIGN_BNDRY, <size_t>ptr))
+
 cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unused_blocks, clibaio.iocb **&blocks_to_submit):
 
     cdef size_t block_k = 0
@@ -152,10 +155,10 @@ def read_blocks(block_iter, size_t max_events=32):
                 unused_blocks.push_front(iocb_p)
 
                 # Convert buffer to numpy object
-                buf_arr = <np.uint8_t[:nbytes]> buf_ptr
-                buf_arr.free_data = True
                 block_meta = (<buf_meta_t *>iocb_p[0].data)[0]
-                yield buf_arr[block_meta.data_start:block_meta.data_end]
+                buf_arr = <char[:(block_meta.data_end - block_meta.data_start)]> (<char*>buf_ptr+block_meta.data_start)
+                buf_arr.callback_free_data = free_aligned
+                yield buf_arr
 
                 # Move to next event
                 num_completed_events -=1
