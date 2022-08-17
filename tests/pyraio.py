@@ -1,4 +1,5 @@
 import pyraio as mdl
+import re
 import pytest
 import numpy.testing as npt
 from itertools import chain
@@ -29,6 +30,8 @@ def DataFile(size=2**20, rng=None):
         fd = os.open(fo.name, os.O_DIRECT, os.O_RDONLY)
 
         path = Path(fo.name)
+
+        print(path, path.stat().st_size)
 
         yield arr, path, fd
 
@@ -88,13 +91,47 @@ def test_sequential():
 
 def test_read_past_eof():
     with pytest.raises(
-        Exception, match="Failed to read the requested number of bytes!"
+        Exception,
+        match=re.escape(
+            "Failed to read the requested number of bytes (read 512 but requested 513-1024) !"
+        ),
     ):
         base_test(
             do_shuffle=False,
             read_specs=[(2**10 - 1, 2)],
             datafile=lambda: DataFile(size=2**10),
         )
+
+
+def test_read_past_eof_2():
+    for read_spec, arr_slice in [
+        [(2**10 - 1, 2), slice(-2, None)],
+        [(2**10, 1), slice(-1, None)],
+        [(0, 3), slice(None, 3)],
+    ]:
+        arr, read_arr = base_test(
+            do_shuffle=False,
+            read_specs=[read_spec],
+            datafile=lambda: DataFile(size=2**10 + 1),
+            do_assert=False,
+        )
+        npt.assert_array_equal(arr.__getitem__(arr_slice), read_arr)
+
+
+def test_negative_offset():
+
+    for read_specs in [(-1, 3), (1, -3)]:
+        with pytest.raises(OverflowError):
+            arr, read_arr = base_test(
+                do_shuffle=False,
+                read_specs=[read_specs],
+                datafile=lambda: DataFile(size=2**10),
+                do_assert=False,
+            )
+
+
+def test_negative_nbytes():
+    pass
 
 
 def test_read_short():

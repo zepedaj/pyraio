@@ -26,14 +26,14 @@ ctypedef struct buf_meta_t:
 cdef void free_aligned(void *ptr):
     free(<void *>floor(ALIGN_BNDRY, <size_t>ptr))
 
-cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unused_blocks, clibaio.iocb **&blocks_to_submit):
+cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unused_blocks, clibaio.iocb **&blocks_to_submit) except -1:
 
     cdef size_t block_k = 0
     cdef char[:] buf_mview
     cdef void * buf_voidp
     cdef int fd
     cdef size_t num_bytes, aligned_num_bytes
-    cdef long long offset, aligned_offset
+    cdef size_t offset, aligned_offset
     cdef buf_meta_t *meta_p
 
     # Prepare new io requests
@@ -148,14 +148,15 @@ def read_blocks(block_iter, size_t max_events=32):
                 if res<0 or res2 != 0:
                     raise Exception(f'Failed event with res={res} and res2={res2}.')
                 iocb_p = next_completed_event[0].obj
+                block_meta = (<buf_meta_t *>iocb_p[0].data)[0]
+
                 buf_ptr = iocb_p[0].u.c.buf
                 nbytes = iocb_p[0].u.c.nbytes
-                if res<0 or <unsigned long>res != nbytes:
-                    raise Exception('Failed to read the requested number of bytes!')
+                if res<0 or <unsigned long>res < block_meta.data_end:
+                    raise Exception(f'Failed to read the requested number of bytes (read {<unsigned long>res} but requested {block_meta.data_end}-{nbytes}) !')
                 unused_blocks.push_front(iocb_p)
 
                 # Convert buffer to numpy object
-                block_meta = (<buf_meta_t *>iocb_p[0].data)[0]
                 buf_arr = <char[:(block_meta.data_end - block_meta.data_start)]> (<char*>buf_ptr+block_meta.data_start)
                 buf_arr.callback_free_data = free_aligned
                 yield buf_arr
