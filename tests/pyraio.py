@@ -31,8 +31,6 @@ def DataFile(size=2**20, rng=None):
 
         path = Path(fo.name)
 
-        print(path, path.stat().st_size)
-
         yield arr, path, fd
 
 
@@ -61,7 +59,7 @@ def base_test(do_shuffle=True, read_specs=None, datafile=None, do_assert=True):
 
         t0 = time()
         data = list(
-            mdl.read_blocks(
+            mdl.raio_read(
                 ((fd, idx, block_size) for (idx, block_size) in read_specs), NUM_READERS
             )
         )
@@ -93,7 +91,7 @@ def test_read_past_eof():
     with pytest.raises(
         Exception,
         match=re.escape(
-            "Failed to read the requested number of bytes (read 512 but requested 513-1024) !"
+            "Failed to read the requested number of bytes (read 512 but requested between 513 and 1024) !"
         ),
     ):
         base_test(
@@ -144,3 +142,24 @@ def test_read_short():
         )
         assert len(read_arr) == numel
         npt.assert_array_equal(arr[posn : posn + numel], read_arr)
+
+
+def test_doc():
+    from pyraio import raio_read, raio_open_ctx
+    from tempfile import NamedTemporaryFile
+    import numpy as np
+
+    with NamedTemporaryFile(mode="wb") as fo:
+
+        # Write some data to the file.
+        N = int(1e6)
+        rng = np.random.default_rng()
+        dat = rng.integers(256, size=N)
+        fo.write(dat)
+        fo.flush()
+
+        # Read the data, 700 bytes at a time
+        K = 700
+        offsets = rng.permutation(range(0, N, K))
+        with raio_open_ctx(fo.name) as fd:
+            dat = list(raio_read((fd, offset, K) for offset in offsets))

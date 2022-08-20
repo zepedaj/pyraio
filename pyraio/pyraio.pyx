@@ -8,10 +8,13 @@ from aligned_alloc_extra cimport floor, ceil
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free
+import os
 
 from libcpp.set cimport set as cpp_set
 from libcpp.list cimport list as cpp_list
 from libcpp cimport bool
+
+from contextlib import contextmanager
 
 np.import_array()
 
@@ -67,8 +70,56 @@ cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unuse
 
     return block_k
 
+def raio_open(filename):
+    """
+    Opens the file for reading. The file mode will include the ``os.O_DIRECT`` flag required by :func:`raio_read`.
 
-def read_blocks(block_iter, size_t max_events=32):
+    :param filename: The filename or path.
+    :return: The file descriptor.
+
+    .. todo:: This function might support alternate modes to support possible ``raio_write``  and ``raio_read_write``.
+    """
+    return os.open(str(filename), os.O_DIRECT | os.O_RDONLY)
+
+@contextmanager
+def raio_open_ctx(filename):
+    """
+    A context manager for :func:`raio_open`.
+    """
+    fd = raio_open(filename)
+    yield fd
+    os.close(fd)
+
+def raio_read(block_iter, size_t max_events=32):
+    """
+    Random Acess IO read. Reads randomly positioned parts of one or more files using low-level system support for parallelization without the need for threads.
+
+    :param block_iters: An iterator that produces tuples of the form ``(<file descriptor>, <offset>, <number of bytes>)``. The file descriptors should be obtained using :func:`raio_open_ctx`.
+    :return: An iterator over arrays containing the requested data.
+
+
+    .. testcode::
+
+        from pyraio import raio_read, raio_open_ctx
+        from tempfile import NamedTemporaryFile
+        import numpy as np
+
+        with NamedTemporaryFile(mode="wb") as fo:
+
+            # Write some data to the file.
+            N = int(1e6)
+            rng = np.random.default_rng()
+            dat = rng.integers(256, size=N)
+            fo.write(dat)
+            fo.flush()
+
+            # Read the data, 700 bytes at a time
+            K = 700
+            offsets = rng.permutation(range(0, N, K))
+            with raio_open_ctx(fo.name) as fd:
+                dat = list(raio_read((fd, offset, K) for offset in offsets))
+
+    """
 
     cdef size_t block_k, num_to_submit
 
@@ -128,8 +179,10 @@ def read_blocks(block_iter, size_t max_events=32):
 
                 # Submit new io requests
                 if num_to_submit>0:
-                    num_submitted = <size_t>clibaio.io_submit(io_ctx, num_to_submit, blocks_to_submit)
-                    if num_submitted != num_to_submit:
+                    num_submitted = clibaio.io_submit(io_ctx, num_to_submit, blocks_to_submit)
+                    if num_submitted <0:
+                        raise Exception(f'Error {num_submitted} when attempting to submit blocks.')
+                    if <size_t>num_submitted != num_to_submit:
                         raise Exception(f'Blocks submitted {num_submitted} do not match requested number {num_to_submit}.')
                 elif unused_blocks.size()==max_events:
                     # Finished all computations.
@@ -152,8 +205,10 @@ def read_blocks(block_iter, size_t max_events=32):
 
                 buf_ptr = iocb_p[0].u.c.buf
                 nbytes = iocb_p[0].u.c.nbytes
-                if res<0 or <unsigned long>res < block_meta.data_end:
-                    raise Exception(f'Failed to read the requested number of bytes (read {<unsigned long>res} but requested {block_meta.data_end}-{nbytes}) !')
+                if res<0:
+                    raise Exception(f'Error {res} with retrieved event.')
+                elif <size_t>res < block_meta.data_end:
+                    raise Exception(f'Failed to read the requested number of bytes (read {res} but requested between {block_meta.data_end} and {nbytes}) !')
                 unused_blocks.push_front(iocb_p)
 
                 # Convert buffer to numpy object

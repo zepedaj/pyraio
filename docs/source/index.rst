@@ -10,7 +10,9 @@ Welcome to pyraio's documentation!
    :maxdepth: 2
    :caption: Contents:
 
+   content/modules
    content/building_for_new_archs
+   content/todo
 
 
 Indices and tables

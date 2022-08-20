@@ -17,10 +17,10 @@
 
 # -- Project information -----------------------------------------------------
 
-project = 'pyraio'
-copyright = '2022, Joaquin Zepeda'
-author = 'Joaquin Zepeda'
-
+project = "pyraio"
+copyright = "2022, Joaquin Zepeda"
+author = "Joaquin Zepeda"
+from pyraio._docs import PROLOG
 
 # -- General configuration ---------------------------------------------------
 
@@ -28,10 +28,23 @@ author = 'Joaquin Zepeda'
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
+    "sphinx.ext.autodoc",
+    "sphinx.ext.doctest",
+    "sphinx.ext.todo",
+    "sphinx.ext.coverage",
+    "sphinx.ext.mathjax",
+    "sphinx.ext.ifconfig",
+    "sphinx.ext.viewcode",
+    "sphinx.ext.extlinks",
+    "sphinx.ext.autosummary",
+    "enum_tools.autoenum",
+    "IPython.sphinxext.ipython_console_highlighting",
+    "IPython.sphinxext.ipython_directive",
+    "sphinx_rtd_theme",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
-templates_path = ['_templates']
+templates_path = ["_templates"]
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -44,9 +57,27 @@ exclude_patterns = []
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
 #
-html_theme = 'alabaster'
+html_theme = "sphinx_rtd_theme"
 
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+html_static_path = ["_static"]
+
+# -- Options for todo extension ----------------------------------------------
+
+# If true, `todo` and `todoList` produce output, else they produce nothing.
+todo_include_todos = True
+
+# -- Extension configuration -------------------------------------------------
+#
+rst_prolog = "\n".join(PROLOG)
+
+autoclass_content = "both"
+autodoc_default_options = {
+    "member-order": "bysource",
+    "members": True,
+    "special-members": "__call__,__getitem__,__len__,__getattribute__",
+    "ignore-module-all": True,
+}
+autosummary_generate = True

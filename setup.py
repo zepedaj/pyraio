@@ -9,8 +9,8 @@ setup(
     ext_modules=cythonize(
         [
             Extension(
-                "pyraio",
-                ["pyraio.pyx"],
+                "pyraio.pyraio",
+                ["pyraio/pyraio.pyx"],
                 libraries=["aio"],
                 define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
             )
