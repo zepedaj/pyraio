@@ -60,7 +60,8 @@ def base_test(do_shuffle=True, read_specs=None, datafile=None, do_assert=True):
         t0 = time()
         data = list(
             mdl.raio_read(
-                ((fd, idx, block_size) for (idx, block_size) in read_specs), NUM_READERS
+                ((fd, idx, block_size, None) for (idx, block_size) in read_specs),
+                NUM_READERS,
             )
         )
         t1 = time()
@@ -68,7 +69,7 @@ def base_test(do_shuffle=True, read_specs=None, datafile=None, do_assert=True):
         delay = t1 - t0
 
         read_arr = np.concatenate(
-            list(np.frombuffer(x.memview, dtype="u1") for x in data)
+            list(np.frombuffer(x.memview, dtype="u1") for x, ref in data)
         )
 
         if do_assert:
@@ -162,4 +163,39 @@ def test_doc():
         K = 700
         offsets = rng.permutation(range(0, N, K))
         with raio_open_ctx(fo.name) as fd:
-            dat = list(raio_read((fd, offset, K) for offset in offsets))
+            dat = list(raio_read((fd, offset, K, None) for offset in offsets))
+
+
+class MyRef:
+    def __init__(self, k):
+        self.k = k
+
+
+def test_ref():
+
+    NUM_READERS = 32
+
+    with DataFile() as (
+        arr,
+        file_path,
+        fd,
+    ):
+        t0 = time()
+        data = list(
+            mdl.raio_read(
+                (
+                    (fd, idx, block_size, MyRef(k))
+                    for k, (idx, block_size) in enumerate(
+                        (k, 4096) for k in range(0, 2**20, 4096)
+                    )
+                ),
+                NUM_READERS,
+            )
+        )
+
+        data.sort(key=lambda x: x[1].k)
+        read_arr = np.concatenate(
+            list(np.frombuffer(x.memview, dtype="u1") for x, ref in data)
+        )
+
+        npt.assert_array_equal(read_arr, arr)

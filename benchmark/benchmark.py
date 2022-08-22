@@ -76,12 +76,14 @@ def test_speed(filename, block_size, depth, read_count):
 
         t0 = time()
         data = list(
-            mdl.raio_read(
+            x[0]
+            for x in mdl.raio_read(
                 (
                     (
                         fd,
                         idx,
                         size - idx if (idx + block_size) > size else block_size,
+                        None,
                     )
                     for idx in indices
                 ),

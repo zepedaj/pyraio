@@ -1,5 +1,6 @@
 # distutils: language = c++
 
+from cpython.ref cimport PyObject, Py_XINCREF, Py_XDECREF
 from cython.view cimport array as cvarray
 from libc.stdio cimport printf
 cimport clibaio
@@ -24,6 +25,7 @@ cdef size_t ALIGN_BNDRY = 512
 ctypedef struct buf_meta_t:
     size_t data_start # Data start position in aligned buffer
     size_t data_end # Data end position in aligned buffer
+    PyObject *ref # A reference supplied by the user.
 
 
 cdef void free_aligned(void *ptr):
@@ -42,7 +44,7 @@ cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unuse
     # Prepare new io requests
     while unused_blocks.size()>0:
         try:
-            fd, offset, num_bytes = next(block_iter)
+            fd, offset, num_bytes, ref = next(block_iter)
         except StopIteration:
             return block_k
 
@@ -62,6 +64,8 @@ cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unuse
         iocb_p[0].data = meta_p
         meta_p[0].data_start = offset - aligned_offset
         meta_p[0].data_end = offset + num_bytes - aligned_offset
+        meta_p[0].ref = <PyObject *>ref
+        Py_XINCREF(meta_p[0].ref)
 
         # Append block
         blocks_to_submit[block_k] = iocb_p
@@ -214,7 +218,9 @@ def raio_read(block_iter, size_t max_events=32):
                 # Convert buffer to numpy object
                 buf_arr = <char[:(block_meta.data_end - block_meta.data_start)]> (<char*>buf_ptr+block_meta.data_start)
                 buf_arr.callback_free_data = free_aligned
-                yield buf_arr
+                ref_out = <object>block_meta.ref
+                Py_XDECREF(block_meta.ref)
+                yield (buf_arr, ref_out)
 
                 # Move to next event
                 num_completed_events -=1
