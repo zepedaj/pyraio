@@ -25,8 +25,14 @@ cdef size_t ALIGN_BNDRY = 512
 ctypedef struct buf_meta_t:
     size_t data_start # Data start position in aligned buffer
     size_t data_end # Data end position in aligned buffer
+    int fd # The original file descriptor
+    size_t offset # The original offset requested
+    size_t num_bytes # The original num bytes requested
     PyObject *ref # A reference supplied by the user.
 
+cdef buf_meta_t_str(buf_meta_t &buf_meta):
+    filename = os.readlink(f'/proc/self/fd/{buf_meta.fd}')
+    return f"<{filename}, offset={buf_meta.offset}, num_bytes={buf_meta.num_bytes}>"
 
 cdef void free_aligned(void *ptr):
     free(<void *>floor(ALIGN_BNDRY, <size_t>ptr))
@@ -64,6 +70,9 @@ cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unuse
         iocb_p[0].data = meta_p
         meta_p[0].data_start = offset - aligned_offset
         meta_p[0].data_end = offset + num_bytes - aligned_offset
+        meta_p[0].fd = fd
+        meta_p[0].offset = offset
+        meta_p[0].num_bytes = num_bytes
         meta_p[0].ref = <PyObject *>ref
         Py_XINCREF(meta_p[0].ref)
 
@@ -210,9 +219,9 @@ def raio_read(block_iter, size_t max_events=32):
                 buf_ptr = iocb_p[0].u.c.buf
                 nbytes = iocb_p[0].u.c.nbytes
                 if res<0:
-                    raise Exception(f'Error {res} with retrieved event.')
+                    raise Exception(f'Error {res} with retrieved event for request {buf_meta_t_str(block_meta)}.')
                 elif <size_t>res < block_meta.data_end:
-                    raise Exception(f'Failed to read the requested number of bytes (read {res} but requested between {block_meta.data_end} and {nbytes}) !')
+                    raise Exception(f'Failed to read the requested number of bytes. Read {res} bytes for request {buf_meta_t_str(block_meta)}.')
                 unused_blocks.push_front(iocb_p)
 
                 # Convert buffer to numpy object
