@@ -32,7 +32,7 @@ ctypedef struct buf_meta_t:
 
 cdef buf_meta_t_str(buf_meta_t &buf_meta):
     filename = os.readlink(f'/proc/self/fd/{buf_meta.fd}')
-    return f"<{filename}, offset={buf_meta.offset}, num_bytes={buf_meta.num_bytes}>"
+    return f"<{filename}, offset={buf_meta.offset}, num_bytes={buf_meta.num_bytes} | data_start={buf_meta.data_start}, data_end={buf_meta.data_end}>"
 
 cdef void free_aligned(void *ptr):
     free(<void *>floor(ALIGN_BNDRY, <size_t>ptr))
@@ -221,7 +221,7 @@ def raio_read(block_iter, size_t max_events=32):
                 if res<0:
                     raise Exception(f'Error {res} with retrieved event for request {buf_meta_t_str(block_meta)}.')
                 elif <size_t>res < block_meta.data_end:
-                    raise Exception(f'Failed to read the requested number of bytes. Read {res} bytes for request {buf_meta_t_str(block_meta)}.')
+                    raise Exception(f'Failed to read the requested number of bytes. Read {res} bytes but required {block_meta.data_end} for request {buf_meta_t_str(block_meta)}.')
                 unused_blocks.push_front(iocb_p)
 
                 # Convert buffer to numpy object
