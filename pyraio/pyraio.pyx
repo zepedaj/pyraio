@@ -3,9 +3,9 @@
 from cpython.ref cimport PyObject, Py_XINCREF, Py_XDECREF
 from cython.view cimport array as cvarray
 from libc.stdio cimport printf
-cimport clibaio
-from aligned_alloc cimport aligned_alloc
-from aligned_alloc_extra cimport floor, ceil
+from . cimport clibaio
+from .aligned_alloc cimport aligned_alloc
+from .aligned_alloc_extra cimport floor, ceil
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free
