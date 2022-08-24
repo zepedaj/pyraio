@@ -91,9 +91,7 @@ def test_sequential():
 def test_read_past_eof():
     with pytest.raises(
         Exception,
-        match=re.escape(
-            "Failed to read the requested number of bytes (read 512 but requested between 513 and 1024) !"
-        ),
+        match="Failed to read the requested number of bytes. Read 512 bytes but required 513 for request <.*, offset=1023, num_bytes=2 | data_start=511, data_end=513>.",
     ):
         base_test(
             do_shuffle=False,
