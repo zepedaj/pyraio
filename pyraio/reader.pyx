@@ -6,6 +6,7 @@ from libc.stdio cimport printf
 from . cimport clibaio
 from .aligned_alloc cimport aligned_alloc
 from .aligned_alloc_extra cimport floor, ceil
+from .util cimport buf_meta_t, buf_meta_t_str
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free
@@ -15,24 +16,11 @@ from libcpp.set cimport set as cpp_set
 from libcpp.list cimport list as cpp_list
 from libcpp cimport bool
 
-from contextlib import contextmanager
 
 np.import_array()
 
 cdef size_t ALIGN_BNDRY = 512
 
-
-ctypedef struct buf_meta_t:
-    size_t data_start # Data start position in aligned buffer
-    size_t data_end # Data end position in aligned buffer
-    int fd # The original file descriptor
-    size_t offset # The original offset requested
-    size_t num_bytes # The original num bytes requested
-    PyObject *ref # A reference supplied by the user.
-
-cdef buf_meta_t_str(buf_meta_t &buf_meta):
-    filename = os.readlink(f'/proc/self/fd/{buf_meta.fd}')
-    return f"<{filename}, offset={buf_meta.offset}, num_bytes={buf_meta.num_bytes} | data_start={buf_meta.data_start}, data_end={buf_meta.data_end}>"
 
 cdef void free_aligned(void *ptr):
     free(<void *>floor(ALIGN_BNDRY, <size_t>ptr))
@@ -82,26 +70,6 @@ cdef size_t prepare_blocks_to_submit(block_iter, cpp_list[clibaio.iocb *] &unuse
         block_k+=1
 
     return block_k
-
-def raio_open(filename):
-    """
-    Opens the file for reading. The file mode will include the ``os.O_DIRECT`` flag required by :func:`raio_read`.
-
-    :param filename: The filename or path.
-    :return: The file descriptor.
-
-    .. todo:: This function might support alternate modes to support possible ``raio_write``  and ``raio_read_write``.
-    """
-    return os.open(str(filename), os.O_DIRECT | os.O_RDONLY)
-
-@contextmanager
-def raio_open_ctx(filename):
-    """
-    A context manager for :func:`raio_open`.
-    """
-    fd = raio_open(filename)
-    yield fd
-    os.close(fd)
 
 def raio_read(block_iter, size_t max_events=32):
     """

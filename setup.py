@@ -9,14 +9,20 @@ setup(
     ext_modules=cythonize(
         [
             Extension(
-                "pyraio.pyraio",
-                ["pyraio/pyraio.pyx"],
+                "pyraio.reader",
+                ["pyraio/reader.pyx"],
                 libraries=["aio"],
                 define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
             ),
             Extension(
-                "pyraio.pyraio_uniform",
-                ["pyraio/pyraio_uniform.pyx"],
+                "pyraio.batch_reader",
+                ["pyraio/batch_reader.pyx"],
+                libraries=["aio"],
+                define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
+            ),
+            Extension(
+                "pyraio.util",
+                ["pyraio/util.pyx"],
                 libraries=["aio"],
                 define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
             ),

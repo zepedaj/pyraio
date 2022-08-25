@@ -1,4 +1,4 @@
-import pyraio.pyraio_uniform as mdl
+import pyraio.batch_reader as mdl
 from sys import getrefcount
 import re
 import pytest
@@ -64,7 +64,7 @@ def base_test(
 
         t0 = time()
         data = list(
-            mdl.raio_read(
+            mdl.raio_batch_read(
                 ((fd, idx, None) for idx in indices),
                 block_size,
                 out_buf_iter(block_size),
@@ -153,7 +153,7 @@ def test_read_short():
 
 
 def test_doc():
-    from pyraio import raio_read, raio_open_ctx
+    from pyraio import raio_batch_read, raio_open_ctx
     from tempfile import NamedTemporaryFile
     import numpy as np
 
@@ -166,11 +166,23 @@ def test_doc():
         fo.write(dat)
         fo.flush()
 
+        # An iterator that produces output buffers
+        def out_batch_iter(size):
+            while True:
+                yield np.empty(size, dtype="u1")
+
         # Read the data, 700 bytes at a time
-        K = 700
-        offsets = rng.permutation(range(0, N, K))
+        num_bytes = 700
+        batch_size = 5  # Will return 5 samples of 700 bytes at a time.
+        offsets = rng.permutation(range(0, N, (N // num_bytes) * num_bytes))
         with raio_open_ctx(fo.name) as fd:
-            dat = list(raio_read((fd, offset, K, None) for offset in offsets))
+            dat = list(
+                raio_batch_read(
+                    ((fd, offset, None) for offset in offsets),
+                    num_bytes,
+                    out_batch_iter(num_bytes * batch_size),
+                )
+            )
 
 
 class MyRef:
@@ -190,7 +202,7 @@ def test_ref():
     ):
         t0 = time()
         data = list(
-            mdl.raio_read(
+            mdl.raio_batch_read(
                 ((fd, idx, MyRef(k)) for k, idx in enumerate(range(0, 2**20, 4096))),
                 block_size,
                 out_buf_iter(block_size),
