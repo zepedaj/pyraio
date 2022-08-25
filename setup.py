@@ -13,7 +13,13 @@ setup(
                 ["pyraio/pyraio.pyx"],
                 libraries=["aio"],
                 define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
-            )
+            ),
+            Extension(
+                "pyraio.pyraio_uniform",
+                ["pyraio/pyraio_uniform.pyx"],
+                libraries=["aio"],
+                define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
+            ),
         ],
         annotate=True,
         language_level="3",
