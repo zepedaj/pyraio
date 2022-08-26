@@ -35,13 +35,48 @@ def DataFile(size=2**20, rng=None):
         yield arr, path, fd
 
 
+def base_raio_batch_read(datafile=None, indices=None, block_size=4096, out_bufs=None):
+    # FULL_FILE_SIZE
+    datafile = datafile or DataFile
+    with datafile() as (
+        arr,
+        file_path,
+        fd,
+    ):
+
+        NUM_READERS = 16
+        if indices is None:
+            NUM_INDICES = None
+
+            size = file_path.stat().st_size
+            indices = list(range(0, size, block_size))
+            shuffle(indices)
+            indices = indices[:NUM_INDICES]
+
+        data = list(
+            mdl.raio_batch_read(
+                ((fd, idx, None) for idx in indices),
+                block_size,
+                out_bufs or out_buf_iter(block_size),
+                NUM_READERS,
+            )
+        )
+
+        return arr, data
+
+
 def out_buf_iter(block_size):
     while True:
         yield np.empty(dtype="u1", shape=(block_size,))
 
 
 def base_test(
-    do_shuffle=True, indices=None, block_size=4096, datafile=None, do_assert=True
+    do_shuffle=True,
+    indices=None,
+    block_size=4096,
+    datafile=None,
+    do_assert=True,
+    out_bufs=None,
 ):
 
     # FULL_FILE_SIZE
@@ -67,7 +102,7 @@ def base_test(
             mdl.raio_batch_read(
                 ((fd, idx, None) for idx in indices),
                 block_size,
-                out_buf_iter(block_size),
+                out_bufs or out_buf_iter(block_size),
                 NUM_READERS,
             )
         )
@@ -162,7 +197,7 @@ def test_doc():
         # Write some data to the file.
         N = int(1e6)
         rng = np.random.default_rng()
-        dat = rng.integers(256, size=N)
+        dat = rng.integers(256, size=N).astype("u1")
         fo.write(dat)
         fo.flush()
 
@@ -174,15 +209,53 @@ def test_doc():
         # Read the data, 700 bytes at a time
         num_bytes = 700
         batch_size = 5  # Will return 5 samples of 700 bytes at a time.
-        offsets = rng.permutation(range(0, N, (N // num_bytes) * num_bytes))
+        num_batches = 4  # Read four batches
+        offsets = range(
+            0, num_bytes * batch_size * num_batches, num_bytes
+        )  # Read four batches
+
         with raio_open_ctx(fo.name) as fd:
-            dat = list(
-                raio_batch_read(
+            dat = [
+                batch
+                for batch, ref in raio_batch_read(
                     ((fd, offset, None) for offset in offsets),
                     num_bytes,
                     out_batch_iter(num_bytes * batch_size),
                 )
-            )
+            ]
+
+        assert [len(_x) for _x in dat] == [batch_size * num_bytes] * num_batches
+
+
+def test_last_batch_pruned():
+    #
+    posns, block_size, batch_size = ([0, 2**10 - 400, 2**10 - 100], 100, 2)
+    #
+    arr, data = base_raio_batch_read(
+        indices=posns,
+        block_size=block_size,
+        out_bufs=out_buf_iter(block_size * batch_size),
+        datafile=lambda: DataFile(size=2**10),
+    )
+    assert len(data) == np.ceil(len(posns) / batch_size)
+    batches = [_x[0] for _x in data]
+    batch_lens = [len(_x) for _x in batches]
+    expected_batch_lens = [block_size * batch_size] * (len(posns) // batch_size) + [
+        (len(posns) % batch_size) * block_size
+    ] * (int(bool(len(posns) % batch_size)))
+    assert batch_lens == expected_batch_lens
+    # TODO:
+    #
+    dat = np.concatenate(batches)
+    read_dat = np.concatenate([arr[_posn : _posn + block_size] for _posn in posns])
+
+    dat.sort()
+    read_dat.sort()
+    npt.assert_array_equal(dat, read_dat)
+
+
+def test_wrong_buf_size_raises_error():
+    raise Exception("TODO")
 
 
 class MyRef:

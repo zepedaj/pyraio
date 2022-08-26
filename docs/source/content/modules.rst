@@ -6,4 +6,4 @@ Modules
    :recursive:
    :toctree: _stubs/modules
 
-   pyraio.pyraio
+   pyraio

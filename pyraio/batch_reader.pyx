@@ -66,22 +66,24 @@ cdef size_t prepare_blocks_to_submit(block_iter, size_t num_bytes, cpp_list[clib
 
 def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32, bool with_refs = True):
     """
-    Random Acess IO read. Reads randomly positioned parts of one or more files using low-level system support for parallelization without the need for threads.
+    raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32, bool with_refs = True)
 
-    :param block_iters: An iterator that produces tuples of the form ``(<file descriptor>, <offset>, <ref>)``. The file descriptors should be obtained using :func:`raio_open_ctx`.
-    Each block read will have size ``block_size``.
+    Random Acess IO read by batches. Reads randomly positioned parts of one or more files using low-level system support for parallelization without the need for threads.
+
+    :param block_iter: An iterator that produces tuples of the form ``(<file descriptor>, <offset>, <ref>)``. The file descriptors should be obtained using :func:`~pyraio.util.raio_open` or :func:`~pyraio.util.raio_open_ctx`.
+        Each block read will have size ``block_size``.
     :param block_size: The size of read blocks.
-    :param out_buf_iter: Data is written sequentially to that buffers supplied by this iterator. Each supplied buffer must have a size that is a multiple of ``block_size``.
-    :param depth: The number of simultaneous i/o requests.
+    :param out_buf_iter: Data is written sequentially to the buffers supplied by this iterator. Each supplied buffer must have a size that is a multiple of ``block_size``.
+    :param depth: The number of simultaneous I/O requests submitted to the OS.
     :param with_refs: Whether to gather and yield references together with the output buffers.
     :return: Yields each buffer from ``out_buf_iter`` once it has been filled with data. The last buffer yielded might be a slice of the provided buffer if there are less
-    samples in ``block_iter`` than required to fill that last buffer. Together, with each buffer, yields a list of the references that correspond to the data in the buffer
-    (unless ``with_refs=False``).
+        samples in ``block_iter`` than required to fill that last buffer. Together, with each buffer, yields a list of the references that correspond to the data in the buffer
+        (unless ``with_refs=False``).
 
 
     .. testcode::
 
-        from pyraio import raio_read, raio_open_ctx
+        from pyraio import raio_batch_read, raio_open_ctx
         from tempfile import NamedTemporaryFile
         import numpy as np
 
@@ -90,15 +92,34 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
             # Write some data to the file.
             N = int(1e6)
             rng = np.random.default_rng()
-            dat = rng.integers(256, size=N)
+            dat = rng.integers(256, size=N).astype("u1")
             fo.write(dat)
             fo.flush()
 
+            # An iterator that produces output buffers
+            def out_batch_iter(size):
+                while True:
+                    yield np.empty(size, dtype="u1")
+
             # Read the data, 700 bytes at a time
-            K = 700
-            offsets = rng.permutation(range(0, N, K))
+            num_bytes = 700
+            batch_size = 5  # Will return 5 samples of 700 bytes at a time.
+            num_batches = 4  # Read four batches
+            offsets = range(
+                0, num_bytes * batch_size * num_batches, num_bytes
+            )  # Read four batches
+
             with raio_open_ctx(fo.name) as fd:
-                dat = list(raio_read((fd, offset, K) for offset in offsets))
+                dat = [
+                    batch
+                    for batch, ref in raio_batch_read(
+                        ((fd, offset, None) for offset in offsets),
+                        num_bytes,
+                        out_batch_iter(num_bytes * batch_size),
+                    )
+                ]
+
+            assert [len(_x) for _x in dat] == [batch_size * num_bytes] * num_batches
 
     """
 
@@ -188,7 +209,7 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
                     raise Exception(f'Error {num_submitted} when attempting to submit blocks.')
                 if <size_t>num_submitted != num_to_submit:
                     raise Exception(f'Blocks submitted {num_submitted} do not match requested number {num_to_submit}.')
-            elif unused_blocks.size()==depth:
+            elif unused_blocks.size()==depth and num_completed_events == 0:
                 # Finished all computations.
 
                 # Yield last batch
