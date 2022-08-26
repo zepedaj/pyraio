@@ -2,7 +2,6 @@
 import warnings
 from cpython.ref cimport PyObject, Py_XINCREF, Py_XDECREF
 from cython.view cimport array as cvarray
-from libc.stdio cimport printf
 from . cimport clibaio
 from .aligned_alloc cimport aligned_alloc
 from .aligned_alloc_extra cimport floor, ceil
@@ -69,7 +68,7 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
     """
     Random Acess IO read. Reads randomly positioned parts of one or more files using low-level system support for parallelization without the need for threads.
 
-    :param block_iters: An iterator that produces tuples of the form ``(<file descriptor>, <offset>)``. The file descriptors should be obtained using :func:`raio_open_ctx`.
+    :param block_iters: An iterator that produces tuples of the form ``(<file descriptor>, <offset>, <ref>)``. The file descriptors should be obtained using :func:`raio_open_ctx`.
     Each block read will have size ``block_size``.
     :param block_size: The size of read blocks.
     :param out_buf_iter: Data is written sequentially to that buffers supplied by this iterator. Each supplied buffer must have a size that is a multiple of ``block_size``.
@@ -118,7 +117,7 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
     # Helper pointers
     cdef clibaio.io_event *next_completed_event=NULL
     cdef cpp_list[clibaio.iocb *] unused_blocks
-    cdef clibaio.io_context_t io_ctx
+    cdef clibaio.io_context_t io_ctx = NULL
     cdef clibaio.iocb * iocb_p
 
     cdef char[:] out_buf
@@ -173,104 +172,101 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
         # Create io_context
         clibaio.io_setup(depth, &io_ctx)
 
-        try:
-            while True:
-                # Prepare new io requests
-                num_to_submit = prepare_blocks_to_submit(block_iter, block_size, unused_blocks, blocks_to_submit)
+        while True:
+            # Prepare new io requests
+            num_to_submit = prepare_blocks_to_submit(block_iter, block_size, unused_blocks, blocks_to_submit)
 
-                # Submit new io requests
-                if num_to_submit>0:
-                    num_submitted=0
-
-                    # TODO: These next two statements should be atomic, but an interrupt can prevent that.
-                    num_submitted = clibaio.io_submit(io_ctx, num_to_submit, blocks_to_submit)
-                    num_pending_events += max(0,num_submitted)
-
-                    if num_submitted <0:
-                        raise Exception(f'Error {num_submitted} when attempting to submit blocks.')
-                    if <size_t>num_submitted != num_to_submit:
-                        raise Exception(f'Blocks submitted {num_submitted} do not match requested number {num_to_submit}.')
-                elif unused_blocks.size()==depth:
-                    # Finished all computations.
-
-                    # Yield last batch
-                    if out_buf_iter is not None and out_buf_ptr != NULL:
-                        yield out_buf[:-(out_buf_end-out_buf_ptr) or None], (out_ref_list if with_refs else None)
-
-                    # Done
-                    return
-
-                # Get completed requests, if none are available.
-                if num_completed_events == 0:
-
-                    # TODO: These next two statements should be atomic, but an interrupt can prevent that.
-                    num_completed_events = clibaio.io_getevents(io_ctx, 1, depth, completed_events, NULL)
-                    num_pending_events -= num_completed_events
-
-                    if num_completed_events<0:
-                        raise Exception(f'Error occurred when attempting to get events ({num_completed_events}).')
-                    next_completed_event = completed_events
-
-
-                # Get next sample
-                res = <long int>next_completed_event[0].res
-                res2 = <long int>next_completed_event[0].res2
-                if res<0 or res2 != 0:
-                    raise Exception(f'Failed event with res={res} and res2={res2}.')
-                iocb_p = next_completed_event[0].obj
-                block_meta_p = (<buf_meta_t *>iocb_p[0].data)
-
-                buf_ptr = iocb_p[0].u.c.buf
-                nbytes = iocb_p[0].u.c.nbytes
-                if res<0:
-                    raise Exception(f'Error {res} with retrieved event for request {buf_meta_t_str(block_meta_p[0])}.')
-                elif <size_t>res < block_meta_p[0].data_end:
-                    raise Exception(f'Failed to read the requested number of bytes. Read {res} bytes but required {block_meta_p[0].data_end} for request {buf_meta_t_str(block_meta_p[0])}.')
-                unused_blocks.push_front(iocb_p)
-
-                # Get the next output buffer
-                if out_buf_ptr == out_buf_end:
-                    try:
-                        out_buf = next(out_buf_iter)
-                        out_ref_list = []
-                        if len(out_buf)%block_size:
-                            raise Exception('The output buffer lengths must be multiples of the block size.')
-                    except StopIteration:
-                        # Ran out of output buffers.
-                        raise Exception('The output buffers iterator stopped before the blocks iterator.')
-
-                    if len(out_buf)==0:
-                        raise Exception('Output buffers cannot be size 0!')
-                    else:
-                        out_buf_ptr = &out_buf[0]
-                        out_buf_end = &out_buf[-1]+1
-
-
-                # Copy the sample to the output buffer.
-                memcpy(out_buf_ptr, <char *>buf_ptr + block_meta_p[0].data_start, block_size)
-                if with_refs:
-                    out_ref_list.append(<object>block_meta_p[0].ref)
-                out_buf_ptr += block_size
-
-                # Yield the output buffer
-                if out_buf_ptr == out_buf_end:
-                    # The output buffer is full, yield it.
-                    out_buf_ptr = NULL
-                    out_buf_end = NULL
-                    yield out_buf, (out_ref_list if with_refs else None)
-                    out_ref_list = None
-
+            # Submit new io requests
+            if num_to_submit>0:
+                num_submitted=0
 
                 # TODO: These next two statements should be atomic, but an interrupt can prevent that.
-                Py_XDECREF(block_meta_p[0].ref)
-                block_meta_p[0].ref = NULL
+                num_submitted = clibaio.io_submit(io_ctx, num_to_submit, blocks_to_submit)
+                num_pending_events += max(0,num_submitted)
 
-                # Move to next event
-                num_completed_events -=1
-                next_completed_event += 1
+                if num_submitted <0:
+                    raise Exception(f'Error {num_submitted} when attempting to submit blocks.')
+                if <size_t>num_submitted != num_to_submit:
+                    raise Exception(f'Blocks submitted {num_submitted} do not match requested number {num_to_submit}.')
+            elif unused_blocks.size()==depth:
+                # Finished all computations.
 
-        finally:
-            clibaio.io_destroy(io_ctx)
+                # Yield last batch
+                if out_buf_iter is not None and out_buf_ptr != NULL:
+                    yield out_buf[:-(out_buf_end-out_buf_ptr) or None], (out_ref_list if with_refs else None)
+
+                # Done
+                return
+
+            # Get completed requests, if none are available.
+            if num_completed_events == 0:
+
+                # TODO: These next two statements should be atomic, but an interrupt can prevent that.
+                num_completed_events = clibaio.io_getevents(io_ctx, 1, depth, completed_events, NULL)
+                num_pending_events -= num_completed_events
+
+                if num_completed_events<0:
+                    raise Exception(f'Error occurred when attempting to get events ({num_completed_events}).')
+                next_completed_event = completed_events
+
+
+            # Get next sample
+            res = <long int>next_completed_event[0].res
+            res2 = <long int>next_completed_event[0].res2
+            if res<0 or res2 != 0:
+                raise Exception(f'Failed event with res={res} and res2={res2}.')
+            iocb_p = next_completed_event[0].obj
+            block_meta_p = (<buf_meta_t *>iocb_p[0].data)
+
+            buf_ptr = iocb_p[0].u.c.buf
+            nbytes = iocb_p[0].u.c.nbytes
+            if res<0:
+                raise Exception(f'Error {res} with retrieved event for request {buf_meta_t_str(block_meta_p[0])}.')
+            elif <size_t>res < block_meta_p[0].data_end:
+                raise Exception(f'Failed to read the requested number of bytes. Read {res} bytes but required {block_meta_p[0].data_end} for request {buf_meta_t_str(block_meta_p[0])}.')
+            unused_blocks.push_front(iocb_p)
+
+            # Get the next output buffer
+            if out_buf_ptr == out_buf_end:
+                try:
+                    out_buf = next(out_buf_iter)
+                    out_ref_list = []
+                    if len(out_buf)%block_size:
+                        raise Exception('The output buffer lengths must be multiples of the block size.')
+                except StopIteration:
+                    # Ran out of output buffers.
+                    raise Exception('The output buffers iterator stopped before the blocks iterator.')
+
+                if len(out_buf)==0:
+                    raise Exception('Output buffers cannot be size 0!')
+                else:
+                    out_buf_ptr = &out_buf[0]
+                    out_buf_end = &out_buf[-1]+1
+
+
+            # Copy the sample to the output buffer.
+            memcpy(out_buf_ptr, <char *>buf_ptr + block_meta_p[0].data_start, block_size)
+            if with_refs:
+                out_ref_list.append(<object>block_meta_p[0].ref)
+            out_buf_ptr += block_size
+
+            # Yield the output buffer
+            if out_buf_ptr == out_buf_end:
+                # The output buffer is full, yield it.
+                out_buf_ptr = NULL
+                out_buf_end = NULL
+                yield out_buf, (out_ref_list if with_refs else None)
+                out_ref_list = None
+
+
+            # TODO: These next two statements should be atomic, but an interrupt can prevent that.
+            Py_XDECREF(block_meta_p[0].ref)
+            block_meta_p[0].ref = NULL
+
+            # Move to next event
+            num_completed_events -=1
+            next_completed_event += 1
+
     finally:
         # Wait for pending events.
         if num_pending_events>0:
@@ -279,7 +275,11 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
             if num_pending_events != num_completed_events:
                 warnings.warn("Failed to get pending events in preparation for memory deallocation. Will attempt to free memory nonetheless.")
 
-        # Decrease  all internally held references not yet decreased.
+        # Destroy the io context
+        if io_ctx:
+            clibaio.io_destroy(io_ctx)
+
+        # Decrease all internally held references not yet decreased.
         for block_k in range(depth):
             Py_XDECREF((<buf_meta_t *>(blocks_memory[block_k].data))[0].ref)
 

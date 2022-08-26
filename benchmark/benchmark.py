@@ -37,6 +37,11 @@ def as_o_direct_rdonly(filename):
     yield Path(filename), fd, None
 
 
+def out_buf_iter(block_size):
+    while True:
+        yield np.empty(dtype="u1", shape=(block_size,))
+
+
 @clx.command()
 @clx.argument(
     "--filename",
@@ -45,21 +50,27 @@ def as_o_direct_rdonly(filename):
     help="The filename to use.A temporary file of size 1 GiB is generated internally by default.",
 )
 @clx.argument(
-    "--block_size",
+    "--block-size",
     type=int,
     default=4096,
     help="The size of each read request in bytes.",
 )
 @clx.argument(
+    "--batch-size",
+    type=lambda x: int(float(x)),
+    default=int(2e4),
+    help="The number of samples to read before yielding from cython.",
+)
+@clx.argument(
     "--depth", type=int, default=32, help="The number of parallel IO requests."
 )
 @clx.argument(
-    "--read_count",
+    "--read-count",
     type=int,
     default=None,
     help="Do at most this many reads (read the full file, by default).",
 )
-def test_speed(filename, block_size, depth, read_count):
+def test_speed(filename, block_size, depth, read_count, batch_size):
 
     with (datafile() if filename is None else as_o_direct_rdonly(filename)) as (
         file_path,
@@ -67,7 +78,7 @@ def test_speed(filename, block_size, depth, read_count):
         _,
     ):
         size = file_path.stat().st_size
-        indices = list(range(0, size, block_size))
+        indices = list(range(0, size, block_size))[:-1]
         shuffle(indices)
         indices = indices[:read_count]
 
@@ -77,24 +88,26 @@ def test_speed(filename, block_size, depth, read_count):
         t0 = time()
         data = list(
             x[0]
-            for x in mdl.raio_read(
+            for x in mdl.raio_batch_read(
                 (
                     (
                         fd,
                         idx,
-                        size - idx if (idx + block_size) > size else block_size,
                         None,
                     )
                     for idx in indices
                 ),
-                depth,
+                block_size,
+                out_buf_iter(block_size * batch_size),
+                depth=depth,
             )
         )
         t1 = time()
         bytes_read = sum(len(x) for x in data)
         delay = t1 - t0
+        num_ios = len(data) * batch_size
         print(
-            f"Read {bytes_read} bytes ({len(data)} ios) in {delay} seconds  -- {bytes_read/delay/1e6} MBs | {len(data)/delay} iops."
+            f"Read {bytes_read} bytes ({num_ios} ios, {len(data)} batches) in {delay} seconds  -- {bytes_read/delay/1e6} MBs | {num_ios/delay} iops."
         )
 
 
