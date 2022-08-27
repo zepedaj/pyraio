@@ -2,6 +2,7 @@
 
 import os
 from contextlib import contextmanager
+import errno
 
 ctypedef struct buf_meta_t:
     size_t data_start # Data start position in aligned buffer
@@ -15,6 +16,8 @@ cdef str buf_meta_t_str(buf_meta_t &buf_meta):
     filename = os.readlink(f'/proc/self/fd/{buf_meta.fd}')
     return f"<{filename}, offset={buf_meta.offset}, num_bytes={buf_meta.num_bytes} | data_start={buf_meta.data_start}, data_end={buf_meta.data_end}>"
 
+cdef str syserr_str(int err_num):
+    return errno.errorcode.get(abs(err_num), f"<UNKNOWN:{err_num}>")
 
 def raio_open(filename):
     """

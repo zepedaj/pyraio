@@ -5,7 +5,7 @@ from cython.view cimport array as cvarray
 from . cimport clibaio
 from .aligned_alloc cimport aligned_alloc
 from .aligned_alloc_extra cimport floor, ceil
-from .util cimport buf_meta_t, buf_meta_t_str
+from .util cimport buf_meta_t, buf_meta_t_str, syserr_str
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free
@@ -206,7 +206,7 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
                 num_pending_events += max(0,num_submitted)
 
                 if num_submitted <0:
-                    raise Exception(f'Error {num_submitted} when attempting to submit blocks.')
+                    raise Exception(f'Error {syserr_str(num_submitted)} when attempting to submit blocks.')
                 if <size_t>num_submitted != num_to_submit:
                     raise Exception(f'Blocks submitted {num_submitted} do not match requested number {num_to_submit}.')
             elif unused_blocks.size()==depth and num_completed_events == 0:
@@ -234,15 +234,13 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
             # Get next sample
             res = <long int>next_completed_event[0].res
             res2 = <long int>next_completed_event[0].res2
-            if res<0 or res2 != 0:
-                raise Exception(f'Failed event with res={res} and res2={res2}.')
             iocb_p = next_completed_event[0].obj
             block_meta_p = (<buf_meta_t *>iocb_p[0].data)
-
             buf_ptr = iocb_p[0].u.c.buf
             nbytes = iocb_p[0].u.c.nbytes
-            if res<0:
-                raise Exception(f'Error {res} with retrieved event for request {buf_meta_t_str(block_meta_p[0])}.')
+
+            if res<0 or res2 != 0:
+                raise Exception(f'Error res={syserr_str(res)}, res2={syserr_str(res2)} with retrieved event for request {buf_meta_t_str(block_meta_p[0])}.')
             elif <size_t>res < block_meta_p[0].data_end:
                 raise Exception(f'Failed to read the requested number of bytes. Read {res} bytes but required {block_meta_p[0].data_end} for request {buf_meta_t_str(block_meta_p[0])}.')
             unused_blocks.push_front(iocb_p)

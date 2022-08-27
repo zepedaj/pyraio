@@ -11,3 +11,5 @@ ctypedef struct buf_meta_t:
     PyObject *ref # A reference supplied by the user.
 
 cdef str buf_meta_t_str(buf_meta_t &buf_meta)
+
+cdef str syserr_str(int errno)
