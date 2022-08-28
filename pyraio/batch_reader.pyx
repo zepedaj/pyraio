@@ -201,6 +201,9 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
             if num_to_submit>0:
                 num_submitted=0
 
+                # TODO: What happens when you submit and some but not all blocks fail? Will the response be negative?
+                # Will num_pending_events have the wrong value? If so, possible seg fault if blocks are released while
+                # libaio is still writing to them.
                 # TODO: These next two statements should be atomic, but an interrupt can prevent that.
                 num_submitted = clibaio.io_submit(io_ctx, num_to_submit, blocks_to_submit)
                 num_pending_events += max(0,num_submitted)
