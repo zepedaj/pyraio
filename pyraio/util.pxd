@@ -13,3 +13,5 @@ ctypedef struct buf_meta_t:
 cdef str buf_meta_t_str(buf_meta_t &buf_meta)
 
 cdef str syserr_str(int errno)
+
+cpdef raio_open(str filename)

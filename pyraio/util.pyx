@@ -11,7 +11,7 @@ cdef str buf_meta_t_str(buf_meta_t &buf_meta):
 cdef str syserr_str(int err_num):
     return errno.errorcode.get(abs(err_num), f"<UNKNOWN:{err_num}>")
 
-def raio_open(filename):
+cpdef raio_open(str filename):
     """
     Opens the file for reading. The file mode will include the ``os.O_DIRECT`` flag required by :func:`raio_read`.
 
