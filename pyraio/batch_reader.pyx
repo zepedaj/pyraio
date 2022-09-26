@@ -205,7 +205,7 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
                 # Will num_pending_events have the wrong value? If so, possible seg fault if blocks are released while
                 # libaio is still writing to them.
                 # TODO: These next two statements should be atomic, but an interrupt can prevent that.
-                num_submitted = clibaio.io_submit(io_ctx, num_to_submit, blocks_to_submit)
+                with nogil: num_submitted = clibaio.io_submit(io_ctx, num_to_submit, blocks_to_submit)
                 num_pending_events += max(0,num_submitted)
 
                 if num_submitted <0:
@@ -226,7 +226,7 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
             if num_completed_events == 0:
 
                 # TODO: These next two statements should be atomic, but an interrupt can prevent that.
-                num_completed_events = clibaio.io_getevents(io_ctx, 1, depth, completed_events, NULL)
+                with nogil: num_completed_events = clibaio.io_getevents(io_ctx, 1, depth, completed_events, NULL)
                 num_pending_events -= num_completed_events
 
                 if num_completed_events<0:
@@ -267,7 +267,7 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
 
 
             # Copy the sample to the output buffer.
-            memcpy(out_buf_ptr, <char *>buf_ptr + block_meta_p[0].data_start, block_size)
+            with nogil: memcpy(out_buf_ptr, <char *>buf_ptr + block_meta_p[0].data_start, block_size)
             if with_refs:
                 out_ref_list.append(<object>block_meta_p[0].ref)
             out_buf_ptr += block_size

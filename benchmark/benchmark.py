@@ -1,4 +1,6 @@
 import pyraio as mdl
+from multiprocessing import Process
+from time import sleep
 from contextlib import contextmanager
 from pathlib import Path
 import os
@@ -7,27 +9,32 @@ from random import shuffle
 from time import time
 import climax as clx
 
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 import numpy as np
 
 
 @contextmanager
-def datafile(size=2**30, rng=None):
+def datafile(size=2**30, prefix=None):
 
     size = int(size)
-    rng = rng or np.random.default_rng()
-    with NamedTemporaryFile(mode="wb") as fo:
+    rng = np.random.default_rng()
+    with TemporaryDirectory(prefix=prefix) as tmp_dir:
 
-        #
-        arr = np.empty(size, dtype="u1")
-        arr[:] = rng.integers(255, size=size)
-        fo.write(arr)
+        # #
+        print("Creating a temporary file...")
+        tmp_filename = Path(tmp_dir) / "file.bin"
+        with open(tmp_filename, "wb") as fo:
+            arr = np.empty(size, dtype="u1")
+            arr[:] = rng.integers(255, size=size)
+            fo.write(arr)
+            fo.flush()
+        # Without this sleep, read is slow!
+        sleep(40)
+        print("Done creating file.")
 
         # Get O_DIRECT file descriptor.
-        # fo.close()
-        fd = os.open(fo.name, os.O_DIRECT, os.O_RDONLY)
-
-        yield Path(fo.name), fd, arr
+        with as_o_direct_rdonly(tmp_filename) as out:
+            yield out
 
 
 @contextmanager
@@ -47,7 +54,13 @@ def out_buf_iter(block_size):
     "--filename",
     type=Path,
     default=None,
-    help="The filename to use.A temporary file of size 1 GiB is generated internally by default.",
+    help="The filename to use.A temporary file of size 1 GiB is generated internally by default using `--prefix`.",
+)
+@clx.argument(
+    "--prefix",
+    type=str,
+    default=None,
+    help="The prefix used when creating a temporary file to read from. Defaults to the standard prefix.",
 )
 @clx.argument(
     "--block-size",
@@ -70,9 +83,11 @@ def out_buf_iter(block_size):
     default=None,
     help="Do at most this many reads (read the full file, by default).",
 )
-def test_speed(filename, block_size, depth, read_count, batch_size):
+def test_speed(filename, block_size, depth, read_count, batch_size, prefix):
 
-    with (datafile() if filename is None else as_o_direct_rdonly(filename)) as (
+    with (
+        datafile(prefix=prefix) if filename is None else as_o_direct_rdonly(filename)
+    ) as (
         file_path,
         fd,
         _,
