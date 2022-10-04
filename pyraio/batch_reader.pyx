@@ -1,9 +1,5 @@
 # distutils: language = c++
 
-# cython: linetrace=True
-# cython: binding=True
-# distutils: define_macros=CYTHON_TRACE_NOGIL=1
-
 import warnings
 from cpython.ref cimport PyObject, Py_XINCREF, Py_XDECREF
 from cython.view cimport array as cvarray
@@ -29,32 +25,9 @@ cdef size_t ALIGN_BNDRY = 512
 
 
 cdef class BlockManager:
-    """
-    Manages read request submission to clibaio.
-    """
-
-    cdef int num_submitted
-    cdef size_t depth, block_size
-
-    cdef cpp_vector[clibaio.iocb] _blocks
-    """Block memory space"""
-    cdef cpp_vector[buf_meta_t_2] _blocks_meta
-    """Block meta memory space"""
-    cdef cpp_list[clibaio.iocb *] unused_blocks
-    """Pointers to unused blocks"""
-    cdef cpp_vector[clibaio.iocb *] pending_blocks
-    """Pointers to blocks that are ready to submit to clibaio.io_submit."""
-    cdef cpp_vector[clibaio.io_event] completed_events
-    """Contains the results of the last call to :meth:`clibaio.io_getevents`."""
-
-    cdef void *aligned_buf_memory
-    """Aligned buffer memory."""
-
-
-    cdef clibaio.io_context_t io_ctx
 
     def __cinit__(self, size_t depth, size_t block_size):
-        cdef int block_k
+        cdef size_t block_k
         cdef size_t max_aligned_num_bytes
         #
         self.num_submitted = 0
@@ -139,7 +112,7 @@ cdef class BlockManager:
         # Remove all pending
         self.pending_blocks.resize(0)
 
-    cdef int get_completed(self, long min_nr=1) nogil except -1:
+    cdef int get_completed(self, long min_nr) nogil except -1:
         """
         :param min_nr: The min number of events to retrieve. Use a non-positive value to retrieve all submitted.
         """
@@ -192,17 +165,6 @@ cdef class BlockManager:
 
 
 cdef class RAIOBatchReader:
-    cdef size_t batch_size
-    cdef list batches
-    cdef int curr_posn # Where next write must happen in the last batch.
-    cdef long long[:] curr_refs
-    cdef char[:,:] curr_data
-    cdef BlockManager block_manager
-
-    # Used to format the output data
-    cdef object ref_map
-    cdef np.dtype dtype
-    cdef tuple shape # Use -1 for first entry if last batch can have a different size.
 
     def __cinit__(self, size_t block_size, size_t batch_size, size_t depth=32, object ref_map=None, np.dtype dtype=None, tuple shape=None):
 
