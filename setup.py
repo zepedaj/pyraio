@@ -9,23 +9,12 @@ setup(
     ext_modules=cythonize(
         [
             Extension(
-                "pyraio.reader",
-                ["pyraio/reader.pyx"],
+                f"pyraio.{_mdl}",
+                [f"pyraio/{_mdl}.pyx"],
                 libraries=["aio"],
                 define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
-            ),
-            Extension(
-                "pyraio.batch_reader",
-                ["pyraio/batch_reader.pyx"],
-                libraries=["aio"],
-                define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
-            ),
-            Extension(
-                "pyraio.util",
-                ["pyraio/util.pyx"],
-                libraries=["aio"],
-                define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
-            ),
+            )
+            for _mdl in ["reader", "batch_reader", "batch_reader_2", "util"]
         ],
         annotate=True,
         language_level="3",

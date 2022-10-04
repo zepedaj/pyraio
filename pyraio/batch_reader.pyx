@@ -183,7 +183,7 @@ def raio_batch_read(block_iter, size_t block_size, out_buf_iter, size_t depth=32
 
         # Create completed events
         completed_events = <clibaio.io_event *> malloc(depth * sizeof(clibaio.io_event))
-        if not blocks_to_submit:
+        if not completed_events:
             raise MemoryError()
 
         # Set unused blocks to all available
