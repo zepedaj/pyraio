@@ -35,7 +35,7 @@ def DataFile(size=2**20, rng=None):
         yield arr, path, fd
 
 
-def base_raio_batch_read(datafile=None, indices=None, block_size=4096, out_bufs=None):
+def base_raio_batch_read(datafile=None, indices=None, block_size=4096, batch_size=1):
     # FULL_FILE_SIZE
     datafile = datafile or DataFile
     with datafile() as (
@@ -55,19 +55,14 @@ def base_raio_batch_read(datafile=None, indices=None, block_size=4096, out_bufs=
 
         data = list(
             mdl.raio_batch_read(
-                ((fd, idx, None) for idx in indices),
+                ((fd, idx) for idx in indices),
                 block_size,
-                out_bufs or out_buf_iter(block_size),
+                batch_size,
                 NUM_READERS,
             )
         )
 
         return arr, data
-
-
-def out_buf_iter(block_size):
-    while True:
-        yield np.empty(dtype="u1", shape=(block_size,))
 
 
 def base_test(
@@ -76,7 +71,7 @@ def base_test(
     block_size=4096,
     datafile=None,
     do_assert=True,
-    out_bufs=None,
+    batch_size=1,
 ):
 
     # FULL_FILE_SIZE
@@ -98,19 +93,21 @@ def base_test(
             indices = indices[:NUM_INDICES]
 
         t0 = time()
-        data = list(
+        batches = list(
             mdl.raio_batch_read(
-                ((fd, idx, None) for idx in indices),
+                ((fd, idx) for idx in indices),
                 block_size,
-                out_bufs or out_buf_iter(block_size),
+                batch_size,
                 NUM_READERS,
             )
         )
         t1 = time()
-        bytes_read = sum(len(x) for x in data)
+        bytes_read = sum(x[1].size for x in batches)
         delay = t1 - t0
 
-        read_arr = np.concatenate(list(np.frombuffer(x, dtype="u1") for x, ref in data))
+        read_arr = np.concatenate(
+            list(np.frombuffer(data, dtype="u1") for ref, data in batches)
+        )
 
         if do_assert:
             if do_shuffle:
@@ -158,7 +155,6 @@ def test_read_past_eof_2():
 
 
 def test_negative_offset():
-
     for indices, block_size in [([-1], 3), ([1], -3)]:
         with pytest.raises(OverflowError):
             arr, read_arr = base_test(
@@ -217,14 +213,12 @@ def test_doc():
         with raio_open_ctx(fo.name) as fd:
             dat = [
                 batch
-                for batch, ref in raio_batch_read(
-                    ((fd, offset, None) for offset in offsets),
-                    num_bytes,
-                    out_batch_iter(num_bytes * batch_size),
+                for ref, batch in raio_batch_read(
+                    ((fd, offset) for offset in offsets), num_bytes, batch_size
                 )
             ]
 
-        assert [len(_x) for _x in dat] == [batch_size * num_bytes] * num_batches
+        assert [_x.size for _x in dat] == [batch_size * num_bytes] * num_batches
 
 
 def test_last_batch_pruned():
@@ -234,24 +228,26 @@ def test_last_batch_pruned():
     arr, data = base_raio_batch_read(
         indices=posns,
         block_size=block_size,
-        out_bufs=out_buf_iter(block_size * batch_size),
+        batch_size=batch_size,
         datafile=lambda: DataFile(size=2**10),
     )
+
     assert len(data) == np.ceil(len(posns) / batch_size)
-    batches = [_x[0] for _x in data]
-    batch_lens = [len(_x) for _x in batches]
+    batches = [_x[1] for _x in data]
+    batch_lens = [_x.size for _x in batches]
     expected_batch_lens = [block_size * batch_size] * (len(posns) // batch_size) + [
         (len(posns) % batch_size) * block_size
     ] * (int(bool(len(posns) % batch_size)))
     assert batch_lens == expected_batch_lens
     # TODO:
     #
-    dat = np.concatenate(batches)
-    read_dat = np.concatenate([arr[_posn : _posn + block_size] for _posn in posns])
-
-    dat.sort()
+    read_dat = np.concatenate(batches)
+    actual_dat = np.concatenate(
+        [arr[_posn : _posn + block_size][None, :] for _posn in posns]
+    )
+    actual_dat.sort()
     read_dat.sort()
-    npt.assert_array_equal(dat, read_dat)
+    npt.assert_array_equal(actual_dat, read_dat)
 
 
 def test_wrong_buf_size_raises_error():
@@ -276,16 +272,17 @@ def test_ref():
         t0 = time()
         data = list(
             mdl.raio_batch_read(
-                ((fd, idx, MyRef(k)) for k, idx in enumerate(range(0, 2**20, 4096))),
+                ((fd, idx, k) for k, idx in enumerate(range(0, 2**20, 4096))),
                 block_size,
-                out_buf_iter(block_size),
+                1,
                 NUM_READERS,
+                ref_map=[MyRef(k) for k in range(2**20 // 4096)],
             )
         )
 
-        data.sort(key=lambda x: x[1][0].k)
+        data.sort(key=lambda x: x[0][0].k)
         for k in range(len(data)):
-            _buf, _ref_list = data[k]
+            _ref_list, _buf = data[k]
             # Ref count = 3 bc of original ref, _buf, and getrefcount param.
             assert getrefcount(_buf) == 3
             assert getrefcount(_ref_list) == 3
@@ -294,6 +291,6 @@ def test_ref():
                 _ref = _ref_list[l]
                 assert getrefcount(_ref) == 3
                 assert isinstance(_ref, MyRef)
-        read_arr = np.concatenate(list(np.frombuffer(x, dtype="u1") for x, ref in data))
+        read_arr = np.concatenate(list(np.frombuffer(x, dtype="u1") for ref, x in data))
 
         npt.assert_array_equal(read_arr, arr)

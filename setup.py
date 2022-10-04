@@ -14,7 +14,7 @@ setup(
                 libraries=["aio"],
                 define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
             )
-            for _mdl in ["reader", "batch_reader", "batch_reader_2", "util"]
+            for _mdl in ["reader", "batch_reader", "util"]
         ],
         annotate=True,
         language_level="3",

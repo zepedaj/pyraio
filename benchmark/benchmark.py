@@ -1,4 +1,4 @@
-import pyraio as mdl
+import pyraio.batch_reader as mdl
 from multiprocessing import Process
 from time import sleep
 from contextlib import contextmanager
@@ -42,11 +42,6 @@ def as_o_direct_rdonly(filename):
     fd = os.open(str(filename), os.O_DIRECT | os.O_RDONLY)
 
     yield Path(filename), fd, None
-
-
-def out_buf_iter(block_size):
-    while True:
-        yield np.empty(dtype="u1", shape=(block_size,))
 
 
 @clx.command()
@@ -102,23 +97,16 @@ def test_speed(filename, block_size, depth, read_count, batch_size, prefix):
 
         t0 = time()
         data = list(
-            x[0]
+            x[1]
             for x in mdl.raio_batch_read(
-                (
-                    (
-                        fd,
-                        idx,
-                        None,
-                    )
-                    for idx in indices
-                ),
+                ((fd, idx) for idx in indices),
                 block_size,
-                out_buf_iter(block_size * batch_size),
+                batch_size,
                 depth=depth,
             )
         )
         t1 = time()
-        bytes_read = sum(len(x) for x in data)
+        bytes_read = sum(x.size for x in data)
         delay = t1 - t0
         num_ios = len(data) * batch_size
         print(
