@@ -251,7 +251,10 @@ cdef class RAIOBatchReader:
         return new_batch
 
 
-    def format_batch(self, long long[:] refs, char[:,:] data, int prune):
+    def format_batch(self, refs, data, int prune):
+
+        refs = np.asarray(refs)
+        data = np.asarray(data)
 
         if prune>=0:
             refs = refs[:prune]
@@ -259,17 +262,17 @@ cdef class RAIOBatchReader:
 
         #
         if self.dtype is not None:
-            out_data = data.view(self.dtype)
+            data = data.view(self.dtype)
         else:
-            out_data = data
+            data = data
 
         #
         if self.ref_map is not None:
-            out_refs = [self.ref_map[k] for k in refs]
+            refs = [self.ref_map[k] for k in refs]
         else:
-            out_refs = refs
+            refs = refs
 
-        return out_refs, out_data
+        return refs, data
 
     def iter(self, input_iter, long long default_ref=0, ref_map=None, dtype=None, shape=None):
         """
