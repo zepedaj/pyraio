@@ -184,9 +184,13 @@ cdef class RAIOBatchReader:
         at least one to become available) and writes them to the ``batches``.
 
         Use a negative ``fd`` will flush all buffers: all pending requests are submitted and the call blocks until all submitted requests are completed and written to ``batches``.
+
+        Will return a 1 if a new batch was initialized and a 0 otherwise. Note that the last batch in :attr:`batches` might not be completed, and only
+        :attr:`curr_posn` elements have been written.
         """
         cdef size_t k
         cdef char[:,:] out_buffer = None
+        cdef int new_batch
         cdef clibaio.io_event event
 
         # Append a new block, exit if the submission queue is not full.
@@ -200,15 +204,15 @@ cdef class RAIOBatchReader:
         # Submit a full depth worth of blocks and get at least one.
         self.block_manager.submit_pending()
         self.block_manager.get_completed(-1 if fd < 0 else 1)
-        batch_ready = self.write_completed()
+        new_batch = self.write_completed()
         self.block_manager.release_completed()
 
-        return batch_ready
+        return new_batch
 
     cdef int write_completed(self) nogil except -1:
         """ Writes all completed events to the output batch and returns an integer indicating whether the batch is complete."""
 
-        cdef int batch_ready = 0
+        cdef int new_batch = 0
         cdef size_t k_event
 
         # Copy blocks to output batch.
@@ -222,6 +226,7 @@ cdef class RAIOBatchReader:
                     self.curr_refs = np.empty(self.batch_size, dtype=np.longlong)
                     self.curr_data = np.empty((self.batch_size, self.block_manager.block_size), dtype=np.uint8)
                     self.batches.append((self.curr_refs, self.curr_data))
+                    new_batch = 1
                 self.curr_posn = 0
 
             # Get next sample
@@ -243,7 +248,7 @@ cdef class RAIOBatchReader:
             memcpy(&(self.curr_data[self.curr_posn,0]), <char *>buf_ptr + block_meta_p[0].data_start, self.block_manager.block_size)
             self.curr_posn += 1
 
-        return batch_ready
+        return new_batch
 
 
     def format_batch(self, long long[:] refs, char[:,:] data, int prune):
