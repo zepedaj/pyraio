@@ -4,8 +4,6 @@ import warnings
 from cpython.ref cimport PyObject, Py_XINCREF, Py_XDECREF
 from cython.view cimport array as cvarray
 from . cimport clibaio
-from .aligned_alloc cimport aligned_alloc
-from .aligned_alloc_extra cimport floor, ceil
 from .util cimport buf_meta_t_2, buf_meta_t_2_str, syserr_str
 import numpy as np
 cimport numpy as np
@@ -13,7 +11,7 @@ from libc.stdlib cimport malloc, free
 import os
 
 from libcpp.set cimport set as cpp_set
-from libcpp.list cimport list as cpp_list
+# from libcpp.list cimport list as cpp_list
 from libcpp.deque cimport deque as cpp_deque
 from libcpp.vector cimport vector as cpp_vector
 from libcpp cimport bool
@@ -31,7 +29,7 @@ cdef class BlockManager:
     """Block memory space"""
     cdef cpp_vector[buf_meta_t_2] _blocks_meta
     """Block meta memory space"""
-    cdef cpp_list[clibaio.iocb *] unused_blocks
+    cdef cpp_deque[clibaio.iocb *] unused_blocks
     """Pointers to unused blocks"""
     cdef cpp_vector[clibaio.iocb *] pending_blocks
     """Pointers to blocks that are ready to submit to clibaio.io_submit."""

@@ -1,28 +1,28 @@
 # distutils: language = c++
+#
 
 import warnings
 from cpython.ref cimport PyObject, Py_XINCREF, Py_XDECREF
 from cython.view cimport array as cvarray
+from cython import boundscheck, cdivision, wraparound
 from . cimport clibaio
 from .aligned_alloc cimport aligned_alloc
-from .aligned_alloc_extra cimport floor, ceil
+
 from .util cimport buf_meta_t_2, buf_meta_t_2_str, syserr_str
 import numpy as np
 cimport numpy as np
 from libc.stdlib cimport malloc, free
 import os
 
-from libcpp.set cimport set as cpp_set
-from libcpp.list cimport list as cpp_list
-from libcpp.deque cimport deque as cpp_deque
-from libcpp.vector cimport vector as cpp_vector
-from libcpp cimport bool
 from libc.string cimport memcpy
+
+from contextlib import nullcontext
+
+from .aligned_alloc_extra cimport floor, ceil
 
 np.import_array()
 
 cdef size_t ALIGN_BNDRY = 512
-
 
 cdef class BlockManager:
 
@@ -39,12 +39,14 @@ cdef class BlockManager:
         # even if size is 0.
         # See `NOTE: self.completed_events.data pointer was pre-allocated` below
         self.completed_events.reserve(depth)
+        self.pending_blocks.reserve(depth)
 
         # Allocate block working memory
         self._blocks.resize(depth)
         self._blocks_meta.resize(depth)
 
         # Allocate aligned buffer space.
+        #
         max_aligned_num_bytes = floor(ALIGN_BNDRY, block_size) + 2*ALIGN_BNDRY
         self.aligned_buf_memory = aligned_alloc(ALIGN_BNDRY, max_aligned_num_bytes*depth)
         if self.aligned_buf_memory == NULL:
@@ -70,19 +72,18 @@ cdef class BlockManager:
 
         cdef size_t aligned_num_bytes, aligned_offset
 
-        if self.unused_blocks.size()==0:
-            raise Exception('Attempted to append new pending block with no space left.')
+        #if self.unused_blocks.size()==0:
+        #    raise Exception('Attempted to append new pending block with no space left.')
 
-        #
         aligned_offset = floor(ALIGN_BNDRY, offset)
         aligned_num_bytes = ceil(ALIGN_BNDRY, self.block_size + offset - aligned_offset)
 
         # Prepare new block
         iocb_p = self.unused_blocks.front()
+        self.unused_blocks.pop_front()
         iocb_p[0].aio_fildes = fd
         iocb_p[0].u.c.nbytes = aligned_num_bytes;
         iocb_p[0].u.c.offset = aligned_offset;
-        self.unused_blocks.pop_front()
 
         # Prepare block's meta
         meta_p = <buf_meta_t_2 *>iocb_p[0].data
@@ -177,7 +178,8 @@ cdef class RAIOBatchReader:
         self.dtype = dtype
         self.shape = shape
 
-    #TODO: @boundscheck(False)
+    @boundscheck(False)
+    @wraparound(False)
     cdef int submit(self, long fd, size_t posn, long long ref) nogil except -1:
         """
         Adds a new request to the pending blocks. If the pending blocks become full, the call gets the available completed events (or waits for
@@ -209,6 +211,8 @@ cdef class RAIOBatchReader:
 
         return new_batch
 
+    @boundscheck(False)
+    @wraparound(False)
     cdef int write_completed(self) nogil except -1:
         """ Writes all completed events to the output batch and returns an integer indicating whether the batch is complete."""
 
@@ -263,14 +267,10 @@ cdef class RAIOBatchReader:
         #
         if self.dtype is not None:
             data = data.view(self.dtype)
-        else:
-            data = data
 
         #
         if self.ref_map is not None:
             refs = [self.ref_map[k] for k in refs]
-        else:
-            refs = refs
 
         return refs, data
 
