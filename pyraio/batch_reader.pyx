@@ -66,7 +66,7 @@ cdef class BlockManager:
         # Create io_context
         clibaio.io_setup(self.depth, &self.io_ctx)
 
-    cdef int append_to_pending(self, int fd, size_t offset, long long ref) nogil except -1:
+    cdef inline int append_to_pending(self, int fd, size_t offset, long long ref) nogil except -1:
         # Appends a block as pending submission.
         # Returns the number of unused blocks remainig.
 
