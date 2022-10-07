@@ -138,7 +138,7 @@ cdef class BlockManager:
             if num_retrieved>0:
                 self.num_submitted -= max(0,num_retrieved)
             elif num_retrieved<0:
-                with gil: raise Exception(f'Error occurred when attempting to get events ({num_retrieved}).')
+                with gil: raise Exception(f'Error occurred when attempting to get events ({syserr_str(num_retrieved)}).')
 
     cdef int release_completed(self) nogil except -1:
         cdef size_t k_event
@@ -274,7 +274,7 @@ cdef class RAIOBatchReader:
 
         return refs, data
 
-    def iter(self, input_iter, long long default_ref=0, ref_map=None, dtype=None, shape=None):
+    def iter(self, input_iter, long long default_ref=0):
         """
         Random Acess IO read by batches. Reads randomly positioned parts of one or more files using low-level system support for read IO parallelization.
         The heavy-duty computations in this class release the GIL -- running this iterator in a separate thread will hence enjoy greater efficiency.
@@ -349,7 +349,7 @@ cdef class RAIOBatchReader:
                 else:
                     raise Exception(f'Expected 2 or 3 values but obtained {len(vals)}.')
 
-            self.submit(fd, posn, ref)
+            with nogil: self.submit(fd, posn, ref)
 
             skip_last = 1 if fd>=0 and self.curr_posn<self.batch_size else 0
             for k_batch in range(len(self.batches)-skip_last):
@@ -363,4 +363,4 @@ cdef class RAIOBatchReader:
 
 def raio_batch_read(input_iter, block_size, batch_size, depth=32, ref_map=None, dtype=None):
     rbr = RAIOBatchReader(block_size, batch_size, depth, ref_map=ref_map, dtype=dtype)
-    yield from rbr.iter(input_iter)
+    return rbr.iter(input_iter)
