@@ -42,10 +42,10 @@ cdef class BlockManager:
 
     cdef clibaio.io_context_t io_ctx
 
-    cdef inline int append_to_pending(self, int fd, size_t offset, long long ref) nogil except -1
+    cdef inline int append_to_pending(self, int fd, size_t offset, long long ref) nogil except +
     cdef int submit_pending(self) nogil except -1
-    cdef int get_completed(self, long min_nr) nogil except -1
-    cdef int release_completed(self) nogil except -1
+    cdef void get_completed(self, long min_nr) nogil except +
+    cdef void release_completed(self) nogil except +
 
 
 cdef class RAIOBatchReader:

@@ -66,14 +66,14 @@ cdef class BlockManager:
         # Create io_context
         clibaio.io_setup(self.depth, &self.io_ctx)
 
-    cdef inline int append_to_pending(self, int fd, size_t offset, long long ref) nogil except -1:
+    cdef inline int append_to_pending(self, int fd, size_t offset, long long ref) nogil except +:
         # Appends a block as pending submission.
         # Returns the number of unused blocks remainig.
 
         cdef size_t aligned_num_bytes, aligned_offset
 
-        #if self.unused_blocks.size()==0:
-        #    raise Exception('Attempted to append new pending block with no space left.')
+        if self.unused_blocks.size()==0:
+            raise Exception('Attempted to append new pending block with no space left.')
 
         aligned_offset = floor(ALIGN_BNDRY, offset)
         aligned_num_bytes = ceil(ALIGN_BNDRY, self.block_size + offset - aligned_offset)
@@ -113,7 +113,7 @@ cdef class BlockManager:
         # Remove all pending
         self.pending_blocks.resize(0)
 
-    cdef int get_completed(self, long min_nr) nogil except -1:
+    cdef void get_completed(self, long min_nr) nogil except +:
         """
         :param min_nr: The min number of events to retrieve. Use a non-positive value to retrieve all submitted.
         """
@@ -140,7 +140,7 @@ cdef class BlockManager:
             elif num_retrieved<0:
                 with gil: raise Exception(f'Error occurred when attempting to get events ({syserr_str(num_retrieved)}).')
 
-    cdef int release_completed(self) nogil except -1:
+    cdef void release_completed(self) nogil except +:
         cdef size_t k_event
         for k_event in range(self.completed_events.size()):
             self.unused_blocks.insert(self.unused_blocks.begin(), self.completed_events[k_event].obj)
