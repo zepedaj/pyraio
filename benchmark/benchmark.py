@@ -78,7 +78,8 @@ def as_o_direct_rdonly(filename):
     default=None,
     help="Do at most this many reads (read the full file, by default).",
 )
-def test_speed(filename, block_size, depth, read_count, batch_size, prefix):
+@clx.argument("--no-randomize", dest="randomize", default=True, action="store_false")
+def test_speed(filename, block_size, depth, read_count, batch_size, prefix, randomize):
 
     with (
         datafile(prefix=prefix) if filename is None else as_o_direct_rdonly(filename)
@@ -89,7 +90,8 @@ def test_speed(filename, block_size, depth, read_count, batch_size, prefix):
     ):
         size = file_path.stat().st_size
         indices = list(range(0, size, block_size))[:-1]
-        shuffle(indices)
+        if randomize:
+            shuffle(indices)
         indices = indices[:read_count]
 
         # fd = os.open(file_path, os.O_RDONLY)
