@@ -7,7 +7,7 @@ from .batch_reader import DataFile
 
 class TestBlockManager:
     def test_all(self):
-        bm = mdl.BlockManager(3600)
+        bm = mdl.BlockManager(100, 32)
 
     def test_read(self):
         block_size = int(1e2)
@@ -16,7 +16,7 @@ class TestBlockManager:
         next_submission = 0
         retrieved = []
 
-        bm = mdl.BlockManager(depth)
+        bm = mdl.BlockManager(block_size, depth)
 
         with DataFile(size=block_size * batch_size, flags=os.O_RDONLY) as (
             arr,
@@ -46,3 +46,8 @@ class TestBlockManager:
             assert sorted(retrieved) == list(range(batch_size))
 
             npt.assert_array_equal(out.reshape(-1), arr)
+
+    def test_perr_enum(self):
+        x = mdl.PERR
+        assert min(x) == mdl.PERR_START
+        assert max(x) >= mdl.PERR_START

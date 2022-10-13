@@ -4,7 +4,8 @@ cdef extern from "<liburing.h>" nogil:
     ctypedef struct io_uring:
         pass
 
-    ctypedef unsigned long long __u64 # Cython replaces the correct type in the header file. See https://cython.readthedocs.io/en/latest/src/userguide/external_C_code.html
+    ctypedef unsigned __u64 # Cython replaces the correct type in the header file. See https://cython.readthedocs.io/en/latest/src/userguide/external_C_code.html
+    ctypedef signed __s64
     ctypedef signed __s32
 
     int EAGAIN
