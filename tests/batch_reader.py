@@ -15,7 +15,7 @@ from time import time
 
 
 @contextmanager
-def DataFile(size=2**20, rng=None):
+def DataFile(size=2**20, rng=None, flags=os.O_DIRECT | os.O_RDONLY):
     size = int(size)
     rng = rng or np.random.default_rng()
     with NamedTemporaryFile(mode="wb") as fo:
@@ -28,7 +28,7 @@ def DataFile(size=2**20, rng=None):
 
         # Get O_DIRECT file descriptor.
         # fo.close()
-        fd = os.open(fo.name, os.O_DIRECT, os.O_RDONLY)
+        fd = os.open(fo.name, flags)
 
         path = Path(fo.name)
 

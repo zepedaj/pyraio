@@ -11,10 +11,15 @@ setup(
             Extension(
                 f"pyraio.{_mdl}",
                 [f"pyraio/{_mdl}.pyx"],
-                libraries=["aio"],
+                libraries=["aio", "uring"],
                 define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
             )
-            for _mdl in ["reader", "batch_reader", "util"]
+            for _mdl in [
+                "reader",
+                "batch_reader",
+                "batch_reader_uring",
+                "util",
+            ]
         ],
         annotate=True,
         language_level="3",
