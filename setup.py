@@ -15,10 +15,7 @@ setup(
                 define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
             )
             for _mdl in [
-                "reader",
                 "batch_reader",
-                "batch_reader_uring",
-                "util",
             ]
         ],
         annotate=True,

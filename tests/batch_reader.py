@@ -1,4 +1,8 @@
-import pyraio.batch_reader as mdl
+from pyraio import batch_reader as mdl
+import os
+import numpy as np
+import numpy.testing as npt
+
 from sys import getrefcount
 import re
 import pytest
@@ -15,7 +19,7 @@ from time import time
 
 
 @contextmanager
-def DataFile(size=2**20, rng=None, flags=os.O_DIRECT | os.O_RDONLY):
+def DataFile(size=2**20, rng=None, flags=os.O_RDONLY):
     size = int(size)
     rng = rng or np.random.default_rng()
     with NamedTemporaryFile(mode="wb") as fo:
@@ -33,6 +37,54 @@ def DataFile(size=2**20, rng=None, flags=os.O_DIRECT | os.O_RDONLY):
         path = Path(fo.name)
 
         yield arr, path, fd
+
+
+class TestBlockManager:
+    def test_all(self):
+        bm = mdl.BlockManager(100, 32)
+
+    def test_read(self):
+        block_size = int(1e2)
+        batch_size = 1000
+        depth = 32
+        next_submission = 0
+        retrieved = []
+
+        bm = mdl.BlockManager(block_size, depth)
+
+        with DataFile(size=block_size * batch_size, flags=os.O_RDONLY) as (
+            arr,
+            path,
+            fd,
+        ):
+
+            out = np.zeros_like(arr).reshape(batch_size, block_size)
+
+            while next_submission < batch_size:
+                if bm._num_pending == depth:
+                    while bm._num_pending > 0:
+
+                        retrieved.append(bm._get_completed(True))
+                bm._submit(
+                    fd,
+                    out[next_submission].ctypes.data,
+                    block_size,
+                    next_submission * block_size,
+                    next_submission,
+                )
+                next_submission += 1
+
+            while bm._num_pending:
+                retrieved.append(bm._get_completed(True))
+
+            assert sorted(retrieved) == list(range(batch_size))
+
+            npt.assert_array_equal(out.reshape(-1), arr)
+
+    def test_perr_enum(self):
+        x = mdl.PERR
+        assert min(x) == mdl.PERR_START
+        assert max(x) >= mdl.PERR_START
 
 
 def base_raio_batch_read(datafile=None, indices=None, block_size=4096, batch_size=1):
@@ -101,6 +153,7 @@ def base_test(
                 NUM_READERS,
             )
         )
+
         t1 = time()
         bytes_read = sum(x[1].size for x in batches)
         delay = t1 - t0
@@ -111,6 +164,7 @@ def base_test(
 
         if do_assert:
             if do_shuffle:
+                # TODO: No need to do this!
                 read_arr.sort()
                 arr.sort()
             npt.assert_array_equal(read_arr, arr)
@@ -128,7 +182,9 @@ def test_sequential():
 def test_read_past_eof():
     with pytest.raises(
         Exception,
-        match="Failed to read the requested number of bytes. Read 512 bytes but required 513 for request <.*, offset=1023, num_bytes=2 | data_start=511, data_end=513>.",
+        match=re.escape(
+            "Failed to read the expected number of bytes: 1 byte(s) read, but expected 2!"
+        ),
     ):
         base_test(
             do_shuffle=False,
@@ -184,7 +240,7 @@ def test_read_short():
 
 
 def test_doc():
-    from pyraio import raio_batch_read, raio_open_ctx
+    from pyraio import raio_batch_read
     from tempfile import NamedTemporaryFile
     import numpy as np
 
@@ -210,7 +266,8 @@ def test_doc():
             0, num_bytes * batch_size * num_batches, num_bytes
         )  # Read four batches
 
-        with raio_open_ctx(fo.name) as fd:
+        with open(fo.name) as fo:
+            fd = fo.fileno()
             dat = [
                 batch
                 for ref, batch in raio_batch_read(
@@ -248,10 +305,6 @@ def test_last_batch_pruned():
     actual_dat.sort()
     read_dat.sort()
     npt.assert_array_equal(actual_dat, read_dat)
-
-
-def test_wrong_buf_size_raises_error():
-    raise Exception("TODO")
 
 
 class MyRef:

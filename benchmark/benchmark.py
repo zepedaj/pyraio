@@ -39,7 +39,7 @@ def datafile(size=2**30, prefix=None):
 
 @contextmanager
 def as_o_direct_rdonly(filename):
-    fd = os.open(str(filename), os.O_DIRECT | os.O_RDONLY)
+    fd = os.open(str(filename), os.O_RDONLY)
 
     yield Path(filename), fd, None
 
@@ -93,9 +93,6 @@ def test_speed(filename, block_size, depth, read_count, batch_size, prefix, rand
         if randomize:
             shuffle(indices)
         indices = indices[:read_count]
-
-        # fd = os.open(file_path, os.O_RDONLY)
-        fd = os.open(file_path, os.O_RDONLY | os.O_DIRECT)
 
         t0 = time()
         data = list(
