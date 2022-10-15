@@ -12,6 +12,8 @@ import climax as clx
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 import numpy as np
 
+import subprocess as subp
+
 
 @contextmanager
 def datafile(size=2**30, prefix=None):
@@ -44,7 +46,9 @@ def as_o_direct_rdonly(filename):
     yield Path(filename), fd, None
 
 
-@clx.command()
+@clx.command(
+    "When not using option `--no-clear-io-cache`, sudo permissions might be required. If so, call using \n\tsudo env PATH=$PATH python benchmark.py <options>"
+)
 @clx.argument(
     "--filename",
     type=Path,
@@ -78,8 +82,36 @@ def as_o_direct_rdonly(filename):
     default=None,
     help="Do at most this many reads (read the full file, by default).",
 )
-@clx.argument("--no-randomize", dest="randomize", default=True, action="store_false")
-def test_speed(filename, block_size, depth, read_count, batch_size, prefix, randomize):
+@clx.argument(
+    "--no-randomize",
+    dest="randomize",
+    default=True,
+    action="store_false",
+    help="Disable read position randomization and instead read sequentially.",
+)
+@clx.argument(
+    "--no-clear-io-cache",
+    action="store_false",
+    dest="clear_io_cache",
+    help="Do not clear io caches before running the benchmark.",
+)
+def test_speed(
+    filename,
+    block_size,
+    depth,
+    read_count,
+    batch_size,
+    prefix,
+    randomize,
+    clear_io_cache,
+):
+
+    if clear_io_cache:
+        out = subp.run(
+            ["tee", "/proc/sys/vm/drop_caches"], input=b"3", stdout=subp.DEVNULL
+        )
+        if out.returncode:
+            raise Exception(str(out))
 
     with (
         datafile(prefix=prefix) if filename is None else as_o_direct_rdonly(filename)

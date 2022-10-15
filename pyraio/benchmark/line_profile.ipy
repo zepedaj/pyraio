@@ -1,0 +1,25 @@
+# Instructions:
+#
+# 1)  Add the following comments (with `#` symbols) to the top of the *.pyx file containing the code to profile:
+#
+# cython: linetrace=True
+# cython: binding=True
+# distutils: define_macros=CYTHON_TRACE_NOGIL=1
+#
+# 2) Re-build the module using its `setup.py` file as follows:
+#
+#   python setup.py build_ext -i
+#
+# 3) Run this file using ipython:
+#   ipython <path>/line_profile.py
+
+from pyraio.benchmark.benchmark import test_speed
+from itertools import islice
+from pyraio import batch_reader
+
+%load_ext line_profiler
+
+#%lprun -f batch_reader.RAIOBatchReader.iter test_speed.func(**vars(test_speed.parser.parse_args()))
+%lprun -f batch_reader.RAIOBatchReader.submit test_speed.func(**vars(test_speed.parser.parse_args()))
+#%lprun -f batch_reader.BlockManager.submit test_speed.func(**vars(test_speed.parser.parse_args()))
+#%lprun -f batch_reader.BlockManager.enqueue test_speed.func(**vars(test_speed.parser.parse_args()))
