@@ -61,20 +61,21 @@ class TestBlockManager:
             out = np.zeros_like(arr).reshape(batch_size, block_size)
 
             while next_submission < batch_size:
-                if bm._num_pending == depth:
-                    while bm._num_pending > 0:
+                if bm._num_submitted == depth:
+                    while bm._num_submitted > 0:
 
                         retrieved.append(bm._get_completed(True))
-                bm._submit(
+                bm._enqueue(
                     fd,
                     out[next_submission].ctypes.data,
                     block_size,
                     next_submission * block_size,
                     next_submission,
                 )
+                bm._submit()
                 next_submission += 1
 
-            while bm._num_pending:
+            while bm._num_submitted:
                 retrieved.append(bm._get_completed(True))
 
             assert sorted(retrieved) == list(range(batch_size))

@@ -23,7 +23,7 @@ cpdef enum PERR:
 
 def err_str(val):
     val = abs(val)
-    if val > PERR_START:
+    if val < PERR_START:
         return errno.errorcode.get(val, f"<UNKNOWN:{val}>")
     else:
         return str(PERR(val))
@@ -32,6 +32,7 @@ cdef class BlockManager:
 
     cdef liburing.io_uring ring
     cdef size_t depth
+    cdef size_t num_submitted
     cdef size_t num_pending
     cdef size_t block_size
     cdef string error_string
@@ -39,50 +40,79 @@ cdef class BlockManager:
     def __cinit__(self, size_t block_size, size_t depth=32):
         cdef int res
 
+        if depth==0 or block_size==0:
+            raise Exception(f'Invalid input args (depth={depth}, block_size={block_size}).')
+
         self.depth = depth
         self.block_size = block_size
+        self.num_submitted = 0
         self.num_pending = 0
         self.error_string = b""
         res = liburing.io_uring_queue_init(depth, &self.ring, 0)
         if res != 0:
             raise Exception(f'Error initializing uring: {err_str(res)}.')
 
-    cdef int submit(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, liburing.__s64 user_data) nogil:
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, liburing.__s64 user_data) nogil:
         """
+        Adds a pending event to the submission queue. If the queue is full (i.e., if ``num_pending + num_submitted == depth``), a space is ensured
+        by submitting all pending and getting at least one completed event.
+
         :param user_data: **Note**: Although this is a signed value, it must be positive. Error code `PERR_SUBMIT_EINVAL` will be returned otherwise.
         :return: 0 on success; negative PERR or ERRNO on failure.
         """
 
-        cdef liburing.io_uring_sqe *sqe
-        cdef int num_submitted
+        cdef liburing.io_uring_sqe *sqe=NULL
         cdef int res
+        cdef int attempts = 0
 
+        # Check input
         if user_data <0:
             return -PERR_SUBMIT_EINVAL
 
+        # Ensure an SQE is available.
+        if self.num_submitted + self.num_pending == self.depth:
+            if not (self.num_submitted>0 and self.get_all_completed(0)>0):
+                self.submit()
+                self.get_all_completed(1)
+
+        # Submit
         sqe = liburing.io_uring_get_sqe(&self.ring)
         if sqe == NULL:
             return -PERR_SUBMIT_GET_SQE
 
+        # Prepare the submission
         liburing.io_uring_prep_read(sqe, fd, buf, nbytes, offset)
         sqe[0].user_data = user_data
-
-        num_submitted = liburing.io_uring_submit(&self.ring)
-        if num_submitted != 1:
-            if num_submitted >0:
-                # Should never happen.
-                self.num_pending+=num_submitted
-                return -PERR_UNEXPECTED
-            else:
-                return num_submitted # This is an ERRNO.
-
-        self.num_pending+=1
+        self.num_pending += 1
 
         return 0 #Success
 
+
+    cdef int submit(self) nogil:
+        """
+        Submits all the events in the submission queue.
+        """
+
+        cdef size_t num_submitted
+
+        num_submitted = liburing.io_uring_submit(&self.ring)
+        if num_submitted != self.num_pending:
+            if num_submitted > 0:
+                # Should never happen.
+                self.num_submitted += num_submitted
+                return -PERR_UNEXPECTED
+            else:
+                return num_submitted # This is a negated ERRNO.
+
+        self.num_submitted += num_submitted
+        self.num_pending -= num_submitted
+
+        return 0
+
+
     cdef liburing.__s64 get_completed(self, int blocking=0) nogil:
         """
-        Retrieves the next completed event is available.
+        Retrieves the next completed event if available, or blocks until available. See also :meth:`get_all_completed`.
 
         :return: Upon success, returns the retrieved event's ``user_data`` (a positive value). When non-blocking, returns ``-EAGAIN`` if no events are
         available. If blocking and a failure occurs, returns a negated error code.
@@ -98,7 +128,7 @@ cdef class BlockManager:
             # An error occurred.
             return out
         else:
-            self.num_pending -= 1
+            self.num_submitted -= 1
             liburing.io_uring_cqe_seen(&self.ring, cqe_ptr)
             if cqe_ptr[0].res < 0:
                 # An error occurred.
@@ -110,10 +140,43 @@ cdef class BlockManager:
                     return -PERR_GET_COMPLETED_WRONG_NUM_BYTES
                 return cqe_ptr[0].user_data
 
+
+    cdef int get_all_completed(self, int min_num_events=1) nogil:
+        """
+        Gets all the completed events that are availble, waiting for at least ``min_num_events`` (which can be set to 0). See also :meth:`get_completed`.
+
+        :return: Returns 0 upon success, or negated PERR or ERRNO error code.
+        """
+        cdef int k
+        cdef int num_completed=0
+
+        # Get at least one.
+        for k in range(min_num_events):
+            out = self.get_completed(True)
+            if out<0: # An error occurred
+                return out
+            num_completed+=1
+
+        # Get all others that are available.
+        while True:
+            out = self.get_completed()
+            if out == -EAGAIN: break
+            elif out < 0: # An error occurred
+                return out
+            num_completed+=1
+
+        return num_completed
+
     ###################################
     ## For testing purposes
-    def _submit(self, fd, buf, nbytes, offset, user_data):
-        out = self.submit(fd, <char *><unsigned long long>buf, nbytes, offset, user_data)
+    def _enqueue(self, fd, buf, nbytes, offset, user_data):
+        out = self.enqueue(fd, <char *><unsigned long long>buf, nbytes, offset, user_data)
+        if out<0:
+            raise Exception(f'Error calling `enqueue`: {err_str(out)}')
+        return out
+
+    def _submit(self):
+        out = self.submit()
         if out<0:
             raise Exception(f'Error calling `submit`: {err_str(out)}')
         return out
@@ -128,8 +191,8 @@ cdef class BlockManager:
         else:
             return out
     @property
-    def _num_pending(self):
-        return self.num_pending
+    def _num_submitted(self):
+        return self.num_submitted
     ###################################
 
     def __dealloc__(self):
@@ -161,15 +224,19 @@ cdef class RAIOBatchReader:
         self.dtype = dtype
 
     cdef int flush(self) nogil:
-        while self.block_manager.num_pending>0:
-            out = self.block_manager.get_completed(True)
+        if self.block_manager.num_pending>0:
+            out = self.block_manager.submit()
             if out<0:
                 return out
+        out = self.block_manager.get_all_completed(self.block_manager.num_submitted)
+        if out<0:
+            return out
         return 0
+
 
     @boundscheck(False)
     @wraparound(False)
-    cdef int submit(self, int fd, size_t posn, long long ref) nogil:
+    cdef int enqueue(self, int fd, size_t posn, long long ref) nogil:
         """
         :return: 0 on success, -PERR or -ERRNO on failure.
         """
@@ -181,35 +248,20 @@ cdef class RAIOBatchReader:
             out = self.flush() # Wait for all pending writes before releasing the memory.
             if out<0:
                 return out
+
             with gil:
                 # TODO: How are errors caught here!
                 self.curr_refs = np.empty(self.batch_size, dtype=np.longlong)
                 self.curr_data = np.empty((self.batch_size, self.block_size), dtype=np.uint8)
-            self.curr_posn = 0
+                self.curr_posn = 0
 
-        # Makes sure there is space to submit one
-        if self.block_manager.num_pending == self.block_manager.depth:
-
-            # Get at least one.
-            out = self.block_manager.get_completed(True)
-            if out<0:
-                # An error occurred
-                return out
-
-            # Get all others that are available.
-            while True:
-                out = self.block_manager.get_completed()
-                if out == -EAGAIN: break
-                elif out < 0:
-                    # An error occurred
-                    return out
-
-        # Submit
-        out = self.block_manager.submit(fd, &(self.curr_data[self.curr_posn,0]), self.block_size, posn, self.curr_posn)
+        # Enqueue the request
+        out = self.block_manager.enqueue(fd, (&(self.curr_data[self.curr_posn,0])), self.block_size, posn, self.curr_posn)
         if out<0:
             return out
-        self.curr_refs[self.curr_posn] = ref
 
+        # Update refs
+        self.curr_refs[self.curr_posn] = ref
         self.curr_posn+=1
 
         return out
@@ -259,8 +311,8 @@ cdef class RAIOBatchReader:
                 else:
                     raise Exception(f'Expected 2 or 3 values but obtained {len(vals)}.')
 
-                with nogil:
-                    out = self.submit(fd, posn, ref)
+                #with nogil:
+                out = self.enqueue(fd, posn, ref)
 
                 if out<0:
                     self.do_raise(out)
