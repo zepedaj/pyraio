@@ -14,6 +14,61 @@ import numpy as np
 
 import subprocess as subp
 
+#####################
+from jzf_datasets.vanilla_dataset.cython.vanilla_batch_reader import (
+    BatchReader as VanillaBatchReader,
+)
+
+from jzf_history import load_history
+from itertools import islice
+
+
+def build_history_input_iter(
+    read_count,
+    randomize,
+    history_root,
+):
+    history = load_history(history_root)
+    batch_reader = VanillaBatchReader(
+        history,
+        sequence_len=100,
+        batch_size=20000,
+        depth=32,
+        randomize=randomize,
+    )
+    return batch_reader.get_read_input_iter()
+
+
+@contextmanager
+def get_input_iter(prefix, path, read_count, block_size, randomize):
+
+    if path is not None and path.is_dir():
+        # History directory
+        _input_iter_obj = build_history_input_iter(read_count, randomize, path)
+        input_iter = islice(_input_iter_obj, read_count)
+        yield input_iter
+
+    else:
+        # Binary file or temporary binary file.
+        with (
+            datafile(prefix=prefix) if path is None else as_o_direct_rdonly(path)
+        ) as (
+            file_path,
+            fd,
+            _,
+        ):
+            size = file_path.stat().st_size
+            indices = list(range(0, size, block_size))[:-1]
+            if randomize:
+                shuffle(indices)
+            indices = indices[:read_count]
+            input_iter = ((fd, idx) for idx in indices)
+
+            yield input_iter
+
+
+#############
+
 
 @contextmanager
 def datafile(size=2**30, prefix=None):
@@ -47,25 +102,26 @@ def as_o_direct_rdonly(filename):
 
 
 @clx.command(
-    "When not using option `--no-clear-io-cache`, sudo permissions might be required. If so, call using \n\tsudo env PATH=$PATH python benchmark.py <options>"
+    "When not using option `--no-clear-io-cache`, sudo permissions might be required. If so, call using \n\tsudo env PATH=$PATH HOME=$HOME python benchmark.py <options>"
 )
 @clx.argument(
-    "--filename",
+    "--path",
     type=Path,
     default=None,
-    help="The filename to use.A temporary file of size 1 GiB is generated internally by default using `--prefix`.",
+    help="""The path to use - can be a file or a jzfin_dataset history directory. If not provided, a temporary file of size 1 GiB is generated internally by default using `--prefix`.
+Example paths: '/data/mirrored/finance/alpaca/minute_unadjusted_sip/', '/data/tmp/large_file_3.tmp'""",  # TODO: Example files are not portable.
 )
 @clx.argument(
     "--prefix",
     type=str,
     default=None,
-    help="The prefix used when creating a temporary file to read from. Defaults to the standard prefix.",
+    help="The prefix used when creating a temporary file to read from. Defaults to the standard prefix. Only valid when `--path` is `None`.",
 )
 @clx.argument(
     "--block-size",
     type=int,
     default=4096,
-    help="The size of each read request in bytes.",
+    help="The size of each read request in bytes. Ignored if a history source is used (the block size is set by the record data type and sequence size in that case.",
 )
 @clx.argument(
     "--batch-size",
@@ -78,7 +134,7 @@ def as_o_direct_rdonly(filename):
 )
 @clx.argument(
     "--read-count",
-    type=int,
+    type=lambda x: int(float(x)),
     default=None,
     help="Do at most this many reads (read the full file, by default).",
 )
@@ -96,7 +152,7 @@ def as_o_direct_rdonly(filename):
     help="Do not clear io caches before running the benchmark.",
 )
 def test_speed(
-    filename,
+    path,
     block_size,
     depth,
     read_count,
@@ -113,24 +169,13 @@ def test_speed(
         if out.returncode:
             raise Exception(str(out))
 
-    with (
-        datafile(prefix=prefix) if filename is None else as_o_direct_rdonly(filename)
-    ) as (
-        file_path,
-        fd,
-        _,
-    ):
-        size = file_path.stat().st_size
-        indices = list(range(0, size, block_size))[:-1]
-        if randomize:
-            shuffle(indices)
-        indices = indices[:read_count]
+    with get_input_iter(prefix, path, read_count, block_size, randomize) as input_iter:
 
         t0 = time()
         data = list(
             x[1]
             for x in mdl.raio_batch_read(
-                ((fd, idx) for idx in indices),
+                input_iter,
                 block_size,
                 batch_size,
                 depth=depth,

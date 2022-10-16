@@ -1,8 +1,10 @@
 # distutils: language = c++
+# cython: c_string_type=unicode, c_string_encoding=utf8
 
 from . cimport liburing
 from libcpp.vector cimport vector as cpp_vector
 from cython import wraparound, boundscheck
+from cython cimport wraparound, boundscheck
 import numpy as np
 cimport numpy as np
 from libc.errno cimport EAGAIN
@@ -100,6 +102,7 @@ cdef class BlockManager:
             if num_submitted > 0:
                 # Should never happen.
                 self.num_submitted += num_submitted
+                self.error_string.append(b'Expected ').append(to_string(self.num_pending)).append(b' submitted blocks, but submitted ').append(to_string(num_submitted)).append(b'.')
                 return -PERR_UNEXPECTED
             else:
                 return num_submitted # This is a negated ERRNO.
@@ -167,6 +170,18 @@ cdef class BlockManager:
 
         return num_completed
 
+    cdef int flush(self) nogil:
+        """ Submits all pending events, if any, and waits for the completion of all submitted events."""
+
+        if self.num_pending>0:
+            out = self.submit()
+            if out<0:
+                return out
+        out = self.get_all_completed(self.num_submitted)
+        if out<0:
+            return out
+        return 0
+
     ###################################
     ## For testing purposes
     def _enqueue(self, fd, buf, nbytes, offset, user_data):
@@ -223,21 +238,13 @@ cdef class RAIOBatchReader:
         self.ref_map = ref_map
         self.dtype = dtype
 
-    cdef int flush(self) nogil:
-        if self.block_manager.num_pending>0:
-            out = self.block_manager.submit()
-            if out<0:
-                return out
-        out = self.block_manager.get_all_completed(self.block_manager.num_submitted)
-        if out<0:
-            return out
-        return 0
-
-
     @boundscheck(False)
     @wraparound(False)
     cdef int enqueue(self, int fd, size_t posn, long long ref) nogil:
         """
+        The user needs to keep track of when enough submissions have been made to fill a batch, otherwise
+        this call might release a completed batch before the user accesses it. See the example in :meth:`iter`.
+
         :return: 0 on success, -PERR or -ERRNO on failure.
         """
 
@@ -245,7 +252,7 @@ cdef class RAIOBatchReader:
 
         # Add a new batch if necessary
         if self.curr_posn==self.batch_size:
-            out = self.flush() # Wait for all pending writes before releasing the memory.
+            out = self.block_manager.flush() # Wait for all pending writes before releasing the memory.
             if out<0:
                 return out
 
@@ -320,14 +327,14 @@ cdef class RAIOBatchReader:
             if self.curr_data is not None and (
                     (stop_iter and self.curr_posn > 0) or
                     self.curr_posn==self.batch_size):
-                out = self.flush()
+                out = self.block_manager.flush()
                 if out < 0:
                     self.do_raise(out)
                 yield self.retrieve_batch()
 
     def do_raise(self, int err_no):
         if self.block_manager.error_string.size()>0:
-            raise Exception(str(self.block_manager.error_string))
+            raise Exception('Program error ' + err_str(err_no) + ': ' + self.block_manager.error_string)
         else:
             raise Exception(err_str(err_no))
 
