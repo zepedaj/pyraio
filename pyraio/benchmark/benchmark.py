@@ -23,11 +23,7 @@ from jzf_history import load_history
 from itertools import islice
 
 
-def build_history_input_iter(
-    read_count,
-    randomize,
-    history_root,
-):
+def build_history_input_iter(read_count, randomize, history_root, direct):
     history = load_history(history_root)
     batch_reader = VanillaBatchReader(
         history,
@@ -35,23 +31,28 @@ def build_history_input_iter(
         batch_size=20000,
         depth=32,
         randomize=randomize,
+        direct=direct,
     )
     return batch_reader.get_read_input_iter()
 
 
 @contextmanager
-def get_input_iter(prefix, path, read_count, block_size, randomize):
+def get_input_iter(prefix, path, read_count, block_size, randomize, direct):
 
     if path is not None and path.is_dir():
         # History directory
-        _input_iter_obj = build_history_input_iter(read_count, randomize, path)
+        _input_iter_obj = build_history_input_iter(
+            read_count, randomize, path, direct=direct
+        )
         input_iter = islice(_input_iter_obj, read_count)
         yield input_iter
 
     else:
         # Binary file or temporary binary file.
         with (
-            datafile(prefix=prefix) if path is None else as_o_direct_rdonly(path)
+            datafile(prefix=prefix, direct=direct)
+            if path is None
+            else as_rdonly(path, direct=direct)
         ) as (
             file_path,
             fd,
@@ -71,7 +72,7 @@ def get_input_iter(prefix, path, read_count, block_size, randomize):
 
 
 @contextmanager
-def datafile(size=2**30, prefix=None):
+def datafile(size=2**30, prefix=None, direct=False):
 
     size = int(size)
     rng = np.random.default_rng()
@@ -90,13 +91,13 @@ def datafile(size=2**30, prefix=None):
         print("Done creating file.")
 
         # Get O_DIRECT file descriptor.
-        with as_o_direct_rdonly(tmp_filename) as out:
+        with as_rdonly(tmp_filename, direct) as out:
             yield out
 
 
 @contextmanager
-def as_o_direct_rdonly(filename):
-    fd = os.open(str(filename), os.O_RDONLY)
+def as_rdonly(filename, direct=False):
+    fd = os.open(str(filename), os.O_RDONLY | (os.O_DIRECT if direct else 0))
 
     yield Path(filename), fd, None
 
@@ -151,6 +152,9 @@ Example paths: '/data/mirrored/finance/alpaca/minute_unadjusted_sip/', '/data/tm
     dest="clear_io_cache",
     help="Do not clear io caches before running the benchmark.",
 )
+@clx.argument(
+    "--direct", action="store_true", help="Whether to open files in O_DIRECT mode."
+)
 def test_speed(
     path,
     block_size,
@@ -160,6 +164,7 @@ def test_speed(
     prefix,
     randomize,
     clear_io_cache,
+    direct,
 ):
 
     if clear_io_cache:
@@ -169,16 +174,15 @@ def test_speed(
         if out.returncode:
             raise Exception(str(out))
 
-    with get_input_iter(prefix, path, read_count, block_size, randomize) as input_iter:
+    with get_input_iter(
+        prefix, path, read_count, block_size, randomize, direct
+    ) as input_iter:
 
         t0 = time()
         data = list(
             x[1]
             for x in mdl.raio_batch_read(
-                input_iter,
-                block_size,
-                batch_size,
-                depth=depth,
+                input_iter, block_size, batch_size, depth=depth, direct=direct
             )
         )
         t1 = time()

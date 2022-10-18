@@ -3,22 +3,28 @@
 
 from . cimport liburing
 from libcpp.vector cimport vector as cpp_vector
-from cython import wraparound, boundscheck
-from cython cimport wraparound, boundscheck
+from libcpp.deque cimport deque as cpp_deque
+from cython cimport wraparound, boundscheck, final, cdivision
 import numpy as np
 cimport numpy as np
 from libc.errno cimport EAGAIN
 from libcpp.string cimport string, to_string
+from libcpp cimport bool as cbool
+from .util cimport memcpy
 
 import errno
 
 np.import_array()
 
+cdef int DEFAULT_DEPTH = 32
+cdef cbool DEFAULT_BLOCKING=False
+cdef cbool DEFAULT_CHECK_NUM_BYTES=True
+
 cpdef enum:
     PERR_START=1000
 
 cpdef enum PERR:
-    PERR_SUBMIT_EINVAL=PERR_START
+    PERR_EINVAL=PERR_START
     PERR_SUBMIT_GET_SQE
     PERR_UNEXPECTED
     PERR_GET_COMPLETED_WRONG_NUM_BYTES
@@ -30,36 +36,67 @@ def err_str(val):
     else:
         return str(PERR(val))
 
-cdef class BlockManager:
+ctypedef struct EventMeta:
+    size_t num_bytes
+    # Used only by DirectEventManager
+    size_t source_num_bytes
+    size_t alignment_diff
+    void * temp_buf
+    void * target_buf
+
+cdef class EventManager:
 
     cdef liburing.io_uring ring
     cdef size_t depth
     cdef size_t num_submitted
     cdef size_t num_pending
-    cdef size_t block_size
+    cdef EventMeta *last_enqueued_meta
+    cdef EventMeta *last_completed_meta
     cdef string error_string
+    cdef cpp_vector[EventMeta] event_metas
+    cdef cpp_deque[EventMeta *] available_event_metas
 
-    def __cinit__(self, size_t block_size, size_t depth=32):
+    def __init__(self, size_t depth=DEFAULT_DEPTH):
         cdef int res
 
-        if depth==0 or block_size==0:
-            raise Exception(f'Invalid input args (depth={depth}, block_size={block_size}).')
+        if depth==0:
+            raise Exception(f'Invalid input args (depth={depth}).')
 
         self.depth = depth
-        self.block_size = block_size
         self.num_submitted = 0
         self.num_pending = 0
         self.error_string = b""
+
+        # Initialize the meta pool
+        self.event_metas.resize(depth)
+        for k in range(depth):
+            self.available_event_metas.push_front(&(self.event_metas[k]))
+
+        # Initialize the uring
         res = liburing.io_uring_queue_init(depth, &self.ring, 0)
         if res != 0:
             raise Exception(f'Error initializing uring: {err_str(res)}.')
 
-    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, liburing.__s64 user_data) nogil:
+    cdef int ensure_sqe_availability(self) nogil:
+        cdef int out = 0
+        # Ensure an SQE is available
+        if self.num_submitted + self.num_pending == self.depth:
+            num_submitted = self.num_submitted
+            if num_submitted <0: return num_submitted # ERROR
+            num_completed = 0 if num_submitted==0 else self.get_all_completed(0)
+            if num_completed <0: return num_submitted
+
+            if not num_completed:
+                self.submit()
+                out = self.get_all_completed(1)
+
+            return out
+
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=False) nogil:
         """
         Adds a pending event to the submission queue. If the queue is full (i.e., if ``num_pending + num_submitted == depth``), a space is ensured
         by submitting all pending and getting at least one completed event.
 
-        :param user_data: **Note**: Although this is a signed value, it must be positive. Error code `PERR_SUBMIT_EINVAL` will be returned otherwise.
         :return: 0 on success; negative PERR or ERRNO on failure.
         """
 
@@ -67,25 +104,28 @@ cdef class BlockManager:
         cdef int res
         cdef int attempts = 0
 
-        # Check input
-        if user_data <0:
-            return -PERR_SUBMIT_EINVAL
-
-        # Ensure an SQE is available.
-        if self.num_submitted + self.num_pending == self.depth:
-            if not (self.num_submitted>0 and self.get_all_completed(0)>0):
-                self.submit()
-                self.get_all_completed(1)
-
-        # Submit
+        # Reserve it
+        if not skip_ensure_sqe_availability:
+            out = self.ensure_sqe_availability()
+            if out < 0: return out
         sqe = liburing.io_uring_get_sqe(&self.ring)
         if sqe == NULL:
             return -PERR_SUBMIT_GET_SQE
 
         # Prepare the submission
         liburing.io_uring_prep_read(sqe, fd, buf, nbytes, offset)
-        sqe[0].user_data = user_data
         self.num_pending += 1
+
+        # Prepare event meta
+        if self.available_event_metas.size()==0:
+            self.error_string.append(b'Available event metas unexpectedly empty!')
+            return -PERR.PERR_UNEXPECTED
+        meta = self.available_event_metas.front()
+        self.available_event_metas.pop_front()
+        meta[0].num_bytes = nbytes
+
+        self.last_enqueued_meta = meta
+        sqe[0].user_data = <liburing.__u64>meta
 
         return 0 #Success
 
@@ -113,12 +153,16 @@ cdef class BlockManager:
         return 0
 
 
-    cdef liburing.__s64 get_completed(self, int blocking=0) nogil:
+    cdef int get_completed(self, cbool blocking=DEFAULT_BLOCKING, cbool check_num_bytes=DEFAULT_CHECK_NUM_BYTES) nogil:
         """
         Retrieves the next completed event if available, or blocks until available. See also :meth:`get_all_completed`.
 
-        :return: Upon success, returns the retrieved event's ``user_data`` (a positive value). When non-blocking, returns ``-EAGAIN`` if no events are
-        available. If blocking and a failure occurs, returns a negated error code.
+        :param blocking: Whether to wait until at least one event is available.
+        :param check_num_bytes: Whether to check whether the expected number of bytes was returned.
+
+        :return: Upon success, returns 0. When non-blocking, returns ``-EAGAIN`` if no events are
+        available. If blocking and a failure occurs, returns a negated error code. If an event is retrieved, :attr:`last_completed_meta` is set to point to that event's meta data and the
+        number of read bytes is returned.
         """
         cdef liburing.io_uring_cqe *cqe_ptr
         cdef int out
@@ -138,17 +182,24 @@ cdef class BlockManager:
                 return cqe_ptr[0].res
             else:
                 # Success
-                if <size_t>cqe_ptr[0].res != self.block_size:
-                    self.error_string.append(b'Failed to read the expected number of bytes: ').append(to_string(<size_t>cqe_ptr[0].res)).append(b' byte(s) read, but expected ').append(to_string(self.block_size)).append(b'!')
+                meta = <EventMeta *>(cqe_ptr[0].user_data)
+                if check_num_bytes and <size_t>cqe_ptr[0].res != meta.num_bytes:
+                    self.error_string.append(
+                        b'Failed to read the expected number of bytes: ').append(
+                            to_string(<size_t>cqe_ptr[0].res)).append(
+                                b' byte(s) read, but expected ').append(
+                                    to_string(meta.num_bytes)).append(b'!')
                     return -PERR_GET_COMPLETED_WRONG_NUM_BYTES
-                return cqe_ptr[0].user_data
+                self.last_completed_meta = <EventMeta *>cqe_ptr[0].user_data
+                self.available_event_metas.push_front(meta)
+                return cqe_ptr[0].res
 
 
     cdef int get_all_completed(self, int min_num_events=1) nogil:
         """
         Gets all the completed events that are availble, waiting for at least ``min_num_events`` (which can be set to 0). See also :meth:`get_completed`.
 
-        :return: Returns 0 upon success, or negated PERR or ERRNO error code.
+        :return: Returns the number of completed events, or a negated PERR or ERRNO error code.
         """
         cdef int k
         cdef int num_completed=0
@@ -184,8 +235,8 @@ cdef class BlockManager:
 
     ###################################
     ## For testing purposes
-    def _enqueue(self, fd, buf, nbytes, offset, user_data):
-        out = self.enqueue(fd, <char *><unsigned long long>buf, nbytes, offset, user_data)
+    def _enqueue(self, fd, buf, nbytes, offset):
+        out = self.enqueue(fd, <char *><unsigned long long>buf, nbytes, offset)
         if out<0:
             raise Exception(f'Error calling `enqueue`: {err_str(out)}')
         return out
@@ -214,9 +265,91 @@ cdef class BlockManager:
          liburing.io_uring_queue_exit(&self.ring)
 
 
+cdef class DirectEventManager(EventManager):
+    """
+    Transparently aligns read offsets, num_bytes, and block sizes in order to support files opened in O_DIRECT mode.
+    """
+    cdef size_t block_size
+    cdef size_t alignment
+    cdef cpp_vector[char] memory
+    cdef cpp_deque[void *] aligned_bufs
+
+    def __init__(self, size_t max_block_size, size_t alignment=512, **kwargs):
+        """
+        Use this when using file descriptors opened with the O_DIRECT option.
+        """
+        cdef size_t k, aligned_block_size
+
+        if max_block_size==0 or alignment==0:
+            raise Exception(f'Invalid input args (max_block_size={max_block_size}, alignment={alignment}).')
+        self.block_size = max_block_size
+        self.alignment = alignment
+        super().__init__(**kwargs)
+
+        aligned_block_size = self.ceil(max_block_size + alignment - 1)
+        self.memory.resize(self.ceil(self.depth*aligned_block_size + alignment - 1))
+
+        for k in range(self.depth):
+            self.aligned_bufs.push_back(<void *>(self.ceil(<size_t>self.memory.data()) + k*aligned_block_size))
+
+    @cdivision(True)
+    cdef size_t ceil(self, size_t ptr) nogil:
+        return self.alignment * (ptr//self.alignment + (ptr%self.alignment>0))
+
+    @cdivision(True)
+    cdef size_t floor(self, size_t ptr) nogil:
+        return self.alignment * (ptr//self.alignment)
+
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=False) nogil:
+
+        cdef size_t offset_floor, alignment_diff
+
+
+        if nbytes>self.block_size:
+            self.error_string.append(b'Invalid value nbytes=').append(to_string(nbytes)).append(b' > self.block_size=').append(to_string(self.block_size))
+            return -PERR_EINVAL
+
+        # Get an aligned buf
+        out = self.ensure_sqe_availability() # Also ensures aligned buf availability.
+        if out < 0: return out
+        if self.aligned_bufs.size() == 0:
+            self.error_string.append(b'Aligned bufs unexpectedly empty!')
+            return -PERR_UNEXPECTED
+        aligned_buf = self.aligned_bufs.front()
+        self.aligned_bufs.pop_front()
+
+        offset_floor = self.floor(offset)
+        alignment_diff = offset - offset_floor
+        out = EventManager.enqueue(self, fd, aligned_buf, self.ceil(nbytes + alignment_diff), offset_floor, True)
+        if out<0:
+            return out
+        self.last_enqueued_meta[0].temp_buf = <void *>(<size_t>aligned_buf + alignment_diff)
+        self.last_enqueued_meta[0].target_buf = buf
+        self.last_enqueued_meta[0].source_num_bytes = nbytes
+        self.last_enqueued_meta[0].alignment_diff = alignment_diff
+
+        return out
+
+    cdef int get_completed(self, cbool blocking=DEFAULT_BLOCKING, cbool check_num_bytes=DEFAULT_CHECK_NUM_BYTES) nogil:
+        out = EventManager.get_completed(self, blocking, False)
+        if out<0:
+            return out
+        meta = self.last_completed_meta[0]
+        min_num_bytes = meta.source_num_bytes + meta.alignment_diff
+        if check_num_bytes and <size_t>out<min_num_bytes:
+            self.error_string.append(
+                b'Failed to read the expected number of bytes: ').append(
+                    to_string(out)).append(
+                        b' byte(s) read, but expected at least ').append(
+                            to_string(min_num_bytes)).append(b'!')
+            return -PERR_GET_COMPLETED_WRONG_NUM_BYTES
+        memcpy(meta.target_buf, meta.temp_buf, meta.source_num_bytes)
+        self.aligned_bufs.push_front(<void *>self.floor(<size_t>meta.temp_buf))
+
+
 cdef class RAIOBatchReader:
 
-    cdef BlockManager block_manager
+    cdef EventManager block_manager
     cdef size_t block_size
     cdef size_t batch_size
     cdef size_t curr_posn
@@ -226,11 +359,12 @@ cdef class RAIOBatchReader:
     cdef object ref_map
     cdef np.dtype dtype
 
-    def __cinit__(self, size_t block_size, size_t batch_size, size_t depth=32, object ref_map=None, np.dtype dtype=None):
+    def __cinit__(self, size_t block_size, size_t batch_size, size_t depth=32, object ref_map=None, np.dtype dtype=None, direct=False):
 
         self.batch_size = batch_size
         self.block_size = block_size
-        self.block_manager = BlockManager(block_size, depth)
+        var = DirectEventManager(block_size, depth=depth) if direct else EventManager(depth=depth)
+        self.block_manager = var
         self.curr_posn = batch_size
         self.curr_refs = None
         self.curr_data = None
@@ -263,7 +397,7 @@ cdef class RAIOBatchReader:
                 self.curr_posn = 0
 
         # Enqueue the request
-        out = self.block_manager.enqueue(fd, (&(self.curr_data[self.curr_posn,0])), self.block_size, posn, self.curr_posn)
+        out = self.block_manager.enqueue(fd, (&(self.curr_data[self.curr_posn,0])), self.block_size, posn)
         if out<0:
             return out
 
@@ -338,6 +472,6 @@ cdef class RAIOBatchReader:
         else:
             raise Exception(err_str(err_no))
 
-def raio_batch_read(input_iter, block_size, batch_size, depth=32, ref_map=None, dtype=None):
-    rbr = RAIOBatchReader(block_size, batch_size, depth, ref_map=ref_map, dtype=dtype)
+def raio_batch_read(input_iter, block_size, batch_size, depth=32, ref_map=None, dtype=None, direct=False):
+    rbr = RAIOBatchReader(block_size, batch_size, depth, ref_map=ref_map, dtype=dtype, direct=direct)
     return rbr.iter(input_iter)
