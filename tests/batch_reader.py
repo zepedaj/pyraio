@@ -352,6 +352,10 @@ class TestRAIOBatchReader:
             npt.assert_array_equal(read_arr, arr)
 
 
+class TestRAIOBatchReaderThreaded(TestRAIOBatchReader):
+    raio_batch_read = mdl.raio_batch_read__threaded
+
+
 class TestRAIOBatchReaderDirect(TestRAIOBatchReader):
     raio_batch_read = lambda self, *args, **kwargs: mdl.raio_batch_read(
         *args, direct=True, **kwargs
