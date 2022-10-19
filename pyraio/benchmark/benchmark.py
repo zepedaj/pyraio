@@ -155,6 +155,11 @@ Example paths: '/data/mirrored/finance/alpaca/minute_unadjusted_sip/', '/data/tm
 @clx.argument(
     "--direct", action="store_true", help="Whether to open files in O_DIRECT mode."
 )
+@clx.argument(
+    "--threaded",
+    action="store_true",
+    help="Process different batches in different threads.",
+)
 def test_speed(
     path,
     block_size,
@@ -165,6 +170,7 @@ def test_speed(
     randomize,
     clear_io_cache,
     direct,
+    threaded,
 ):
 
     if clear_io_cache:
@@ -174,6 +180,8 @@ def test_speed(
         if out.returncode:
             raise Exception(str(out))
 
+    _fxn = mdl.raio_batch_read__threaded if threaded else mdl.raio_batch_read
+
     with get_input_iter(
         prefix, path, read_count, block_size, randomize, direct
     ) as input_iter:
@@ -181,7 +189,7 @@ def test_speed(
         t0 = time()
         data = list(
             x[1]
-            for x in mdl.raio_batch_read(
+            for x in _fxn(
                 input_iter, block_size, batch_size, depth=depth, direct=direct
             )
         )

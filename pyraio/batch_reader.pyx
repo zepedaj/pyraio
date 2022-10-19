@@ -472,23 +472,24 @@ def raio_batch_read(input_iter, block_size, batch_size, depth=32, ref_map=None, 
 
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
-def raio_batch_read__threaded(input_iter, block_size, batch_size, num_threads=2, **kwargs):
-    max_submitted = num_threads * 2
+def raio_batch_read__threaded(input_iter, block_size, batch_size, num_threads=2, job_queue_size=4, batches_per_job=1, **kwargs):
+    job_queue_size = max(job_queue_size, num_threads)
     submitted = []
     sub_iter = [None]
 
     input_iter = iter(input_iter)
 
     def _expanded_single_batch(*args, **kwargs):
-        return list(raio_batch_read(*args, **kwargs))[0]
+        return list(raio_batch_read(*args, **kwargs))
 
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         while True:
-            if sub_iter and len(submitted) <  max_submitted:
-                sub_iter = list(islice(input_iter,batch_size))
+            if sub_iter and len(submitted) <  job_queue_size:
+                sub_iter = list(islice(input_iter, batch_size*batches_per_job))
                 if sub_iter:
                     submitted.append(executor.submit(_expanded_single_batch, iter(sub_iter), block_size, batch_size, **kwargs))
             else:
                 if not submitted:
                     break
-                yield submitted.pop(0).result()
+                batches = submitted.pop(0).result()
+                yield from batches
