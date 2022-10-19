@@ -19,6 +19,7 @@ np.import_array()
 cdef int DEFAULT_DEPTH = 32
 cdef cbool DEFAULT_BLOCKING=False
 cdef cbool DEFAULT_CHECK_NUM_BYTES=True
+cdef cbool DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY=False
 
 cpdef enum:
     PERR_START=1000
@@ -44,7 +45,13 @@ ctypedef struct EventMeta:
     void * temp_buf
     void * target_buf
 
-cdef class EventManager:
+cdef class BaseEventManager:
+    cdef int flush(self) nogil:
+        raise NotImplementedError('Abstract class.')
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) nogil:
+        raise NotImplementedError('Abstract class.')
+
+cdef class EventManager(BaseEventManager):
 
     cdef liburing.io_uring ring
     cdef size_t depth
@@ -52,7 +59,6 @@ cdef class EventManager:
     cdef size_t num_pending
     cdef EventMeta *last_enqueued_meta
     cdef EventMeta *last_completed_meta
-    cdef string error_string
     cdef cpp_vector[EventMeta] event_metas
     cdef cpp_deque[EventMeta *] available_event_metas
 
@@ -77,22 +83,18 @@ cdef class EventManager:
         if res != 0:
             raise Exception(f'Error initializing uring: {err_str(res)}.')
 
-    cdef int ensure_sqe_availability(self) nogil:
+    cdef inline int ensure_sqe_availability(self) nogil:
         cdef int out = 0
         # Ensure an SQE is available
         if self.num_submitted + self.num_pending == self.depth:
-            num_submitted = self.num_submitted
-            if num_submitted <0: return num_submitted # ERROR
-            num_completed = 0 if num_submitted==0 else self.get_all_completed(0)
-            if num_completed <0: return num_submitted
+            out = self.submit()
+            if out<0:
+                return out
+            out = self.get_all_completed(1)
 
-            if not num_completed:
-                self.submit()
-                out = self.get_all_completed(1)
+        return out
 
-            return out
-
-    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=False) nogil:
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) nogil:
         """
         Adds a pending event to the submission queue. If the queue is full (i.e., if ``num_pending + num_submitted == depth``), a space is ensured
         by submitting all pending and getting at least one completed event.
@@ -300,7 +302,7 @@ cdef class DirectEventManager(EventManager):
     cdef size_t floor(self, size_t ptr) nogil:
         return self.alignment * (ptr//self.alignment)
 
-    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=False) nogil:
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) nogil:
 
         cdef size_t offset_floor, alignment_diff
 
@@ -349,22 +351,12 @@ cdef class DirectEventManager(EventManager):
 
 cdef class RAIOBatchReader:
 
-    cdef EventManager block_manager
-    cdef size_t block_size
-    cdef size_t batch_size
-    cdef size_t curr_posn
-    cdef long long[:] curr_refs
-    cdef char[:,:] curr_data
-
-    cdef object ref_map
-    cdef np.dtype dtype
-
     def __cinit__(self, size_t block_size, size_t batch_size, size_t depth=32, object ref_map=None, np.dtype dtype=None, direct=False):
 
         self.batch_size = batch_size
         self.block_size = block_size
-        var = DirectEventManager(block_size, depth=depth) if direct else EventManager(depth=depth)
-        self.block_manager = var
+        #TODO: Rename block_manager->event_manager
+        self.block_manager = DirectEventManager(block_size, depth=depth) if direct else EventManager(depth=depth)
         self.curr_posn = batch_size
         self.curr_refs = None
         self.curr_data = None
@@ -452,8 +444,9 @@ cdef class RAIOBatchReader:
                 else:
                     raise Exception(f'Expected 2 or 3 values but obtained {len(vals)}.')
 
-                #with nogil:
-                out = self.enqueue(fd, posn, ref)
+                with nogil:
+                    # Capturing the GIL slows things down slightly, but enables multi-core threading.
+                    out = self.enqueue(fd, posn, ref)
 
                 if out<0:
                     self.do_raise(out)
@@ -461,7 +454,8 @@ cdef class RAIOBatchReader:
             if self.curr_data is not None and (
                     (stop_iter and self.curr_posn > 0) or
                     self.curr_posn==self.batch_size):
-                out = self.block_manager.flush()
+                with nogil:
+                    out = self.block_manager.flush()
                 if out < 0:
                     self.do_raise(out)
                 yield self.retrieve_batch()
