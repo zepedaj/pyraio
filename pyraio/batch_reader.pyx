@@ -350,6 +350,17 @@ cdef class DirectEventManager(EventManager):
 
 
 cdef class RAIOBatchReader:
+    """
+    Iterates over batches read from a binary file. Reads can occur in random order. Each output batch contains blocks of size math:`N \times S`, where :math:`N` is the batch size and :math:`S` is the block size.
+    The returned batch is in numpy array form. By default, the dtype is ``uint8``, but a dtype can be specified as well.
+
+    :param block_size: The size :math:`S` of each block.
+    :param batch_size: The number of blocks :math:`N` in each batch.
+    :param depth: The maximum number of low-level read requests occuring simultaneously.
+    :param ref_map: A mapper for block references. Programmers can use this to keep track of metadata associated to each block.
+    :param dtype: The dtype to use to interpret blocks.
+    :param direct: Whether to use aligned memory and disk blocks -- this is required if the file descriptors were opened using the ``O_DIRECT`` option.
+    """
 
     def __cinit__(self, size_t block_size, size_t batch_size, size_t depth=32, object ref_map=None, np.dtype dtype=None, direct=False):
 
@@ -423,6 +434,8 @@ cdef class RAIOBatchReader:
 
     def iter(self, input_iter, long long default_ref=0):
         """
+        Iterates over batches built from the ``(file descriptor, position)`` tuples obtained from ``input_iter``. This can also returns three-tuples ``(file descriptor, position, ref_idx)``,
+        in which case batches of reference IDs are also returned, mapped with :attr:`ref_map` if this was provided at initialization. If no reference is provided, ``default_ref`` is used instead.
         """
         cdef int fd
         cdef liburing.__u64 posn
@@ -466,28 +479,40 @@ cdef class RAIOBatchReader:
         else:
             raise Exception(err_str(err_no))
 
-def raio_batch_read(input_iter, block_size, batch_size, depth=32, ref_map=None, dtype=None, direct=False):
-    rbr = RAIOBatchReader(block_size, batch_size, depth, ref_map=ref_map, dtype=dtype, direct=direct)
+def raio_batch_read(input_iter, *args, **kwargs):
+    """
+    Takes the same arguments as :class:`RAIOBatchReader`.
+    """
+    rbr = RAIOBatchReader(*args, **kwargs)
     return rbr.iter(input_iter)
 
 from concurrent.futures import ThreadPoolExecutor
 from itertools import islice
-def raio_batch_read__threaded(input_iter, block_size, batch_size, num_threads=2, job_queue_size=4, batches_per_job=1, **kwargs):
+def raio_batch_read__threaded(input_iter, *args, num_threads=2, job_queue_size=4, batches_per_job=1, **kwargs):
+    """
+    Creates chunks of the input iter and processes chunks using various threads. Each chunk (except possibly the last) has a multiple of batch size samples.
+
+    Takes the same arguments as :class:`RAIOBatchReader`, as well as the keyword arguments explicit in the signature that control threads and work distribution.
+    """
     job_queue_size = max(job_queue_size, num_threads)
     submitted = []
     sub_iter = [None]
 
+    ### TODO: Use inspect to get batch_size by arg name relative to the RAIOBatchReader signature
+    ### instead of using args[1] as below.
+    batch_size = args[1]
+
     input_iter = iter(input_iter)
 
-    def _expanded_single_batch(*args, **kwargs):
-        return list(raio_batch_read(*args, **kwargs))
+    def _worker(_sub_iter):
+        return list(raio_batch_read(_sub_iter, *args, **kwargs))
 
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
         while True:
             if sub_iter and len(submitted) <  job_queue_size:
                 sub_iter = list(islice(input_iter, batch_size*batches_per_job))
                 if sub_iter:
-                    submitted.append(executor.submit(_expanded_single_batch, iter(sub_iter), block_size, batch_size, **kwargs))
+                    submitted.append(executor.submit(_worker, iter(sub_iter)))
             else:
                 if not submitted:
                     break
