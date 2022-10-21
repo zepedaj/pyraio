@@ -48,7 +48,7 @@ ctypedef struct EventMeta:
 cdef class BaseEventManager:
     cdef int flush(self) nogil:
         raise NotImplementedError('Abstract class.')
-    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) nogil:
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) nogil except *:
         raise NotImplementedError('Abstract class.')
 
 cdef class EventManager(BaseEventManager):
@@ -144,7 +144,7 @@ cdef class EventManager(BaseEventManager):
             if num_submitted > 0:
                 # Should never happen.
                 self.num_submitted += num_submitted
-                self.error_string.append(b'Expected ').append(to_string(self.num_pending)).append(b' submitted blocks, but submitted ').append(to_string(num_submitted)).append(b'.')
+                self.error_string.append(b'Expected ').append(to_string(self.num_pending)).append(b' events submitted, but submitted ').append(to_string(num_submitted)).append(b'.')
                 return -PERR_UNEXPECTED
             else:
                 return num_submitted # This is a negated ERRNO.
@@ -366,8 +366,7 @@ cdef class RAIOBatchReader:
 
         self.batch_size = batch_size
         self.block_size = block_size
-        #TODO: Rename block_manager->event_manager
-        self.block_manager = DirectEventManager(block_size, depth=depth) if direct else EventManager(depth=depth)
+        self.event_manager = DirectEventManager(block_size, depth=depth) if direct else EventManager(depth=depth)
         self.curr_posn = batch_size
         self.curr_refs = None
         self.curr_data = None
@@ -377,7 +376,7 @@ cdef class RAIOBatchReader:
 
     @boundscheck(False)
     @wraparound(False)
-    cdef int enqueue(self, int fd, size_t posn, long long ref) nogil:
+    cdef int enqueue(self, int fd, size_t posn, long long ref) nogil except *:
         """
         The user needs to keep track of when enough submissions have been made to fill a batch, otherwise
         this call might release a completed batch before the user accesses it. See the example in :meth:`iter`.
@@ -389,18 +388,17 @@ cdef class RAIOBatchReader:
 
         # Add a new batch if necessary
         if self.curr_posn==self.batch_size:
-            out = self.block_manager.flush() # Wait for all pending writes before releasing the memory.
+            out = self.event_manager.flush() # Wait for all pending writes before releasing the memory.
             if out<0:
                 return out
 
             with gil:
-                # TODO: How are errors caught here!
                 self.curr_refs = np.empty(self.batch_size, dtype=np.longlong)
                 self.curr_data = np.empty((self.batch_size, self.block_size), dtype=np.uint8)
                 self.curr_posn = 0
 
         # Enqueue the request
-        out = self.block_manager.enqueue(fd, (&(self.curr_data[self.curr_posn,0])), self.block_size, posn)
+        out = self.event_manager.enqueue(fd, (&(self.curr_data[self.curr_posn,0])), self.block_size, posn)
         if out<0:
             return out
 
@@ -468,14 +466,14 @@ cdef class RAIOBatchReader:
                     (stop_iter and self.curr_posn > 0) or
                     self.curr_posn==self.batch_size):
                 with nogil:
-                    out = self.block_manager.flush()
+                    out = self.event_manager.flush()
                 if out < 0:
                     self.do_raise(out)
                 yield self.retrieve_batch()
 
     def do_raise(self, int err_no):
-        if self.block_manager.error_string.size()>0:
-            raise Exception('Program error ' + err_str(err_no) + ': ' + self.block_manager.error_string)
+        if self.event_manager.error_string.size()>0:
+            raise Exception('Program error ' + err_str(err_no) + ': ' + self.event_manager.error_string)
         else:
             raise Exception(err_str(err_no))
 
