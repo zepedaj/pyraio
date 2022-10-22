@@ -1,10 +1,12 @@
 # distutils: language = c++
 # cython: c_string_type=unicode, c_string_encoding=utf8
 
+from typing import Union, Iterable, Tuple
 from . cimport liburing
+from .read_input_iter cimport FilePosn, ReadInputIterWrapper, BaseReadInputIter
 from libcpp.vector cimport vector as cpp_vector
 from libcpp.deque cimport deque as cpp_deque
-from cython cimport wraparound, boundscheck, final, cdivision
+from cython cimport wraparound, boundscheck, final, cdivision, binding
 import numpy as np
 cimport numpy as np
 from libc.errno cimport EAGAIN
@@ -349,6 +351,8 @@ cdef class DirectEventManager(EventManager):
         self.aligned_bufs.push_front(<void *>self.floor(<size_t>meta.temp_buf))
 
 
+DEFAULT_DIRECT = False
+
 cdef class RAIOBatchReader:
     """
     Iterates over batches read from a binary file. Reads can occur in random order. Each output batch contains blocks of size math:`N \times S`, where :math:`N` is the batch size and :math:`S` is the block size.
@@ -359,10 +363,14 @@ cdef class RAIOBatchReader:
     :param depth: The maximum number of low-level read requests occuring simultaneously.
     :param ref_map: A mapper for block references. Programmers can use this to keep track of metadata associated to each block.
     :param dtype: The dtype to use to interpret blocks.
-    :param direct: Whether to use aligned memory and disk blocks -- this is required if the file descriptors were opened using the ``O_DIRECT`` option.
+    :param direct: Whether to use aligned memory and disk blocks -- this is required if the file descriptors were opened using the ``O_DIRECT`` option, and can increase throughput when reads are random.
     """
 
-    def __cinit__(self, size_t block_size, size_t batch_size, size_t depth=32, object ref_map=None, np.dtype dtype=None, direct=False):
+    def __cinit__(self, *args, **kwargs):
+        self.init_helper(*args, **kwargs)
+
+    @binding(True)
+    def init_helper(self, size_t block_size, size_t batch_size, size_t depth=32, object ref_map=None, np.dtype dtype=None, direct=DEFAULT_DIRECT):
 
         self.batch_size = batch_size
         self.block_size = block_size
@@ -430,46 +438,48 @@ cdef class RAIOBatchReader:
 
         return refs, data
 
-    def iter(self, input_iter, long long default_ref=0):
-        """
-        Iterates over batches built from the ``(file descriptor, position)`` tuples obtained from ``input_iter``. This can also returns three-tuples ``(file descriptor, position, ref_idx)``,
-        in which case batches of reference IDs are also returned, mapped with :attr:`ref_map` if this was provided at initialization. If no reference is provided, ``default_ref`` is used instead.
-        """
-        cdef int fd
-        cdef liburing.__u64 posn
-        cdef long long ref=default_ref
+    def iter(self, input_iter : Union[Iterable[Union[Tuple[int,int],Tuple[int,int,int]]], BaseReadInputIter]):
+        cdef BaseReadInputIter read_input_iter
+
+        if isinstance(input_iter, BaseReadInputIter):
+            read_input_iter = input_iter
+        else:
+            read_input_iter = ReadInputIterWrapper(input_iter)
+
+        return self.citer(read_input_iter)
+
+    def citer(self, BaseReadInputIter read_input_iter):
+        """ Iterates over batches assembled from the input iterator. The input iterator can be a ``BaseReadInputIrer``-derived type (for greater efficiency),
+        or a python iterable over ``(fd,posn)`` or ``(fd,posn,ref)`` tuples."""
+
+        cdef int out=0
+        cdef size_t k
         cdef int stop_iter = 0
-        cdef int out
+        cdef FilePosn fposn
 
         while stop_iter == 0:
-            try:
-                vals = next(input_iter)
-            except StopIteration:
-                stop_iter = 1
 
-            if stop_iter == 0:
-                if len(vals)==2:
-                    fd, posn = vals
-                elif len(vals)==3:
-                    fd, posn, ref = vals
+            # Build one batch
+            #with nogil:
+            for k in range(self.batch_size):
+                fposn = read_input_iter.next()
+                if fposn.fd<0:
+                    stop_iter = 1
+                    break
                 else:
-                    raise Exception(f'Expected 2 or 3 values but obtained {len(vals)}.')
+                    out = self.enqueue(fposn.fd, fposn.posn, fposn.key_id)
+                    if out<0:
+                        break
+            if out>=0:
+                out = self.event_manager.flush()
 
-                with nogil:
-                    # Capturing the GIL slows things down slightly, but enables multi-core threading.
-                    out = self.enqueue(fd, posn, ref)
 
-                if out<0:
-                    self.do_raise(out)
-
-            if self.curr_data is not None and (
-                    (stop_iter and self.curr_posn > 0) or
-                    self.curr_posn==self.batch_size):
-                with nogil:
-                    out = self.event_manager.flush()
-                if out < 0:
-                    self.do_raise(out)
+            # Yield one batch or return error
+            if out < 0:
+                self.do_raise(out)
+            elif self.curr_data is not None and self.curr_posn > 0:
                 yield self.retrieve_batch()
+
 
     def do_raise(self, int err_no):
         if self.event_manager.error_string.size()>0:
@@ -477,42 +487,77 @@ cdef class RAIOBatchReader:
         else:
             raise Exception(err_str(err_no))
 
+from inspect import signature, Signature
+def get_arg_by_name(name, *args, **kwargs):
+    #NOTE: Cython discards default/keyword argument information, and hence this method
+    # will only work for explicitly provided parameters.
+    sgntr = signature(RAIOBatchReader.init_helper)
+    return sgntr.bind_partial(None, *args, **kwargs).arguments[name]
+
 def raio_batch_read(input_iter, *args, **kwargs):
     """
-    Takes the same arguments as :class:`RAIOBatchReader`.
+    Automatically chooses between threaded / non-threaded readers based the value of ``direct`` (a threaded reader is used when ``direct=True``).
+    See :clas:`RAIOBatchRead` for a description of all arguments.
+    """
+    try:
+        direct = get_arg_by_name('direct', *args, **kwargs)
+    except KeyError:
+        direct = DEFAULT_DIRECT
+    if not direct:
+        return raio_batch_read__non_threaded(input_iter, *args, **kwargs)
+    else:
+        return raio_batch_read__threaded(input_iter, *args, **kwargs)
+
+def raio_batch_read__non_threaded(input_iter, *args, **kwargs):
+    """
+    Thin wrapper around :class:`RAIOBatchReader` for compatibility with the :class:`raio_batch_reader__threaded` variant below.
     """
     rbr = RAIOBatchReader(*args, **kwargs)
     return rbr.iter(input_iter)
 
 from concurrent.futures import ThreadPoolExecutor
-from itertools import islice
+from pglib.parallelization.threading import ThreadOutsourcedIterable
 def raio_batch_read__threaded(input_iter, *args, num_threads=2, job_queue_size=4, batches_per_job=1, **kwargs):
     """
     Creates chunks of the input iter and processes chunks using various threads. Each chunk (except possibly the last) has a multiple of batch size samples.
 
     Takes the same arguments as :class:`RAIOBatchReader`, as well as the keyword arguments explicit in the signature that control threads and work distribution.
     """
+
+    cdef BaseReadInputIter read_input_iter
+
     job_queue_size = max(job_queue_size, num_threads)
     submitted = []
     sub_iter = [None]
 
     ### TODO: Use inspect to get batch_size by arg name relative to the RAIOBatchReader signature
     ### instead of using args[1] as below.
-    batch_size = args[1]
+    batch_size = get_arg_by_name('batch_size', *args, **kwargs)
 
-    input_iter = iter(input_iter)
+    if not isinstance(input_iter, BaseReadInputIter):
+        read_input_iter = ReadInputIterWrapper(input_iter)
+    else:
+        read_input_iter = input_iter
 
-    def _worker(_sub_iter):
-        return list(raio_batch_read(_sub_iter, *args, **kwargs))
+    def _worker(chunk):
+        return list(raio_batch_read__non_threaded(chunk, *args, **kwargs))
 
-    with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        while True:
-            if sub_iter and len(submitted) <  job_queue_size:
-                sub_iter = list(islice(input_iter, batch_size*batches_per_job))
-                if sub_iter:
-                    submitted.append(executor.submit(_worker, iter(sub_iter)))
-            else:
-                if not submitted:
-                    break
-                batches = submitted.pop(0).result()
-                yield from batches
+    # Thread-outsource chunk construction.
+    with ThreadOutsourcedIterable(read_input_iter.iter_chunks(batch_size*batches_per_job)) as rii_chunks:
+        rii_chunks_iter = iter(rii_chunks)
+        rii_chunks_stopped = False
+
+        # Use multiple threads to build batches.
+        submitted = []
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            while True:
+                if not rii_chunks_stopped and len(submitted) <  job_queue_size:
+                    try:
+                        submitted.append(executor.submit(_worker, next(rii_chunks_iter)))
+                    except StopIteration:
+                        rii_chunks_stopped = True
+                else:
+                    if not submitted:
+                        break
+                    batches = submitted.pop(0).result()
+                    yield from batches

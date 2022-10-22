@@ -16,6 +16,7 @@ setup(
             )
             for _mdl in [
                 "batch_reader",
+                "read_input_iter",
             ]
         ],
         annotate=True,

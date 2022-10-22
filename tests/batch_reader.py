@@ -99,15 +99,20 @@ class MyRef:
         self.k = k
 
 
-class TestRAIOBatchReader:
-    raio_batch_read = mdl.raio_batch_read
+class TestRAIOBatchReaderNonThreaded:
+    flags = os.O_RDONLY
+    raio_batch_read = lambda self, *args, **kwargs: mdl.raio_batch_read__non_threaded(
+        *args, **kwargs
+    )
+
+    def DataFile(self, **kwargs):
+        return DataFile(**{"flags": self.flags, **kwargs})
 
     def base_raio_batch_read(
-        self, datafile=None, indices=None, block_size=4096, batch_size=1
+        self, indices=None, block_size=4096, batch_size=1, DataFile_kwargs=None
     ):
         # FULL_FILE_SIZE
-        datafile = datafile or DataFile
-        with datafile() as (
+        with self.DataFile(**(DataFile_kwargs or {})) as (
             arr,
             file_path,
             fd,
@@ -138,14 +143,13 @@ class TestRAIOBatchReader:
         do_shuffle=True,
         indices=None,
         block_size=4096,
-        datafile=None,
+        DataFile_kwargs=None,
         do_assert=True,
         batch_size=1,
     ):
 
         # FULL_FILE_SIZE
-        datafile = datafile or DataFile
-        with datafile() as (
+        with self.DataFile(**(DataFile_kwargs or {})) as (
             arr,
             file_path,
             fd,
@@ -203,7 +207,7 @@ class TestRAIOBatchReader:
                 do_shuffle=False,
                 indices=[2**10 - 1],
                 block_size=2,
-                datafile=lambda: DataFile(size=2**10),
+                DataFile_kwargs={"size": 2**10},
             )
 
     def test_read_past_eof_2(self):
@@ -216,7 +220,7 @@ class TestRAIOBatchReader:
                 do_shuffle=False,
                 indices=indices,
                 block_size=block_size,
-                datafile=lambda: DataFile(size=2**10 + 1),
+                DataFile_kwargs={"size": 2**10 + 1},
                 do_assert=False,
             )
             npt.assert_array_equal(arr.__getitem__(arr_slice), read_arr)
@@ -228,7 +232,7 @@ class TestRAIOBatchReader:
                     do_shuffle=False,
                     indices=indices,
                     block_size=block_size,
-                    datafile=lambda: DataFile(size=2**10),
+                    DataFile_kwargs={"size": 2**10},
                     do_assert=False,
                 )
 
@@ -241,7 +245,7 @@ class TestRAIOBatchReader:
                 do_shuffle=False,
                 indices=[posn],
                 block_size=block_size,
-                datafile=lambda: DataFile(size=2**10),
+                DataFile_kwargs={"size": 2**10},
                 do_assert=False,
             )
             assert len(read_arr) == block_size
@@ -293,7 +297,7 @@ class TestRAIOBatchReader:
             indices=posns,
             block_size=block_size,
             batch_size=batch_size,
-            datafile=lambda: DataFile(size=2**10),
+            DataFile_kwargs={"size": 2**10},
         )
 
         assert len(data) == np.ceil(len(posns) / batch_size)
@@ -318,7 +322,7 @@ class TestRAIOBatchReader:
         NUM_READERS = 32
         block_size = 4096
 
-        with DataFile() as (
+        with self.DataFile() as (
             arr,
             file_path,
             fd,
@@ -352,15 +356,21 @@ class TestRAIOBatchReader:
             npt.assert_array_equal(read_arr, arr)
 
 
-class TestRAIOBatchReaderThreaded(TestRAIOBatchReader):
-    raio_batch_read = mdl.raio_batch_read__threaded
-
-
-class TestRAIOBatchReaderDirect(TestRAIOBatchReader):
-    raio_batch_read = lambda self, *args, **kwargs: mdl.raio_batch_read(
+class TestRAIOBatchReaderNonThreadedDirect(TestRAIOBatchReaderNonThreaded):
+    flags = os.O_RDONLY | os.O_DIRECT
+    raio_batch_read = lambda self, *args, **kwargs: mdl.raio_batch_read__threaded(
         *args, direct=True, **kwargs
     )
 
     mismatched_bytes_expr = re.escape(
         "Failed to read the expected number of bytes: 512 byte(s) read, but expected at least 513!"
     )
+
+
+class TestRAIOBatchReaderThreaded(TestRAIOBatchReaderNonThreaded):
+    flags = os.O_RDONLY
+    raio_batch_read = mdl.raio_batch_read__threaded
+
+
+class TestRAIOBatchReaderThreadedDirect(TestRAIOBatchReaderThreaded):
+    flags = os.O_RDONLY
