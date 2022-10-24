@@ -180,25 +180,24 @@ def test_speed(
         if out.returncode:
             raise Exception(str(out))
 
-    _fxn = mdl.raio_batch_read__threaded if threaded else mdl.raio_batch_read
+    _fxn = (
+        mdl.raio_batch_read__threaded if threaded else mdl.raio_batch_read__non_threaded
+    )
 
     with get_input_iter(
         prefix, path, read_count, block_size, randomize, direct
     ) as input_iter:
 
+        raio_iter = _fxn(input_iter, block_size, batch_size, depth=depth, direct=direct)
+
         t0 = time()
-        data = list(
-            x[1]
-            for x in _fxn(
-                input_iter, block_size, batch_size, depth=depth, direct=direct
-            )
-        )
+        batch_sizes = list(x[1].size for x in raio_iter)
         t1 = time()
-        bytes_read = sum(x.size for x in data)
+        bytes_read = sum(batch_sizes)
         delay = t1 - t0
-        num_ios = len(data) * batch_size
+        num_ios = len(batch_sizes) * batch_size
         print(
-            f"Read {bytes_read} bytes ({num_ios} ios, {len(data)} batches) in {delay} seconds  -- {bytes_read/delay/1e6} MBs | {num_ios/delay} iops."
+            f"Read {bytes_read} bytes ({num_ios} ios, {len(batch_sizes)} batches) in {delay} seconds  -- {bytes_read/delay/1e6} MBs | {num_ios/delay} iops."
         )
 
 

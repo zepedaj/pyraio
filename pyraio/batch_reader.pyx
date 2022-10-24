@@ -439,18 +439,15 @@ cdef class RAIOBatchReader:
         return refs, data
 
     def iter(self, input_iter : Union[Iterable[Union[Tuple[int,int],Tuple[int,int,int]]], BaseReadInputIter]):
+        """ Iterates over batches assembled from the input iterator. The input iterator can be a ``BaseReadInputIrer``-derived type (for greater efficiency),
+        or a python iterable over ``(fd,posn)`` or ``(fd,posn,ref)`` tuples."""
+
         cdef BaseReadInputIter read_input_iter
 
         if isinstance(input_iter, BaseReadInputIter):
             read_input_iter = input_iter
         else:
             read_input_iter = ReadInputIterWrapper(input_iter)
-
-        return self.citer(read_input_iter)
-
-    def citer(self, BaseReadInputIter read_input_iter):
-        """ Iterates over batches assembled from the input iterator. The input iterator can be a ``BaseReadInputIrer``-derived type (for greater efficiency),
-        or a python iterable over ``(fd,posn)`` or ``(fd,posn,ref)`` tuples."""
 
         cdef int out=0
         cdef size_t k
@@ -539,6 +536,7 @@ def raio_batch_read__threaded(input_iter, *args, num_threads=2, job_queue_size=4
     else:
         read_input_iter = input_iter
 
+    # TODO: Convert to cdef
     def _worker(chunk):
         return list(raio_batch_read__non_threaded(chunk, *args, **kwargs))
 
