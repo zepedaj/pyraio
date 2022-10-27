@@ -13,6 +13,7 @@ from libc.errno cimport EAGAIN
 from libcpp.string cimport string, to_string
 from libcpp cimport bool as cbool
 from .util cimport memcpy
+from contextlib import nullcontext
 
 import errno
 
@@ -363,70 +364,28 @@ cdef class RAIOBatchReader:
     :param depth: The maximum number of low-level read requests occuring simultaneously.
     :param ref_map: A mapper for block references. Programmers can use this to keep track of metadata associated to each block.
     :param dtype: The dtype to use to interpret blocks.
-    :param direct: Whether to use aligned memory and disk blocks -- this is required if the file descriptors were opened using the ``O_DIRECT`` option, and can increase throughput when reads are random.
+    :param direct: Whether to use aligned memory and aligned disk blocks -- this is required if the file descriptors were opened using the ``O_DIRECT`` option, and can increase throughput when reads are random.
+    :param drop_gil: This must be set to ``True`` if using threading (e.g., through a call to :meth:`raio_batch_read__threaded`) -- doing so builds batches using a ``with nogil`` block. If threading is not used, making this ``False`` results in faster execution.   
     """
 
     def __cinit__(self, *args, **kwargs):
         self.init_helper(*args, **kwargs)
 
     @binding(True)
-    def init_helper(self, size_t block_size, size_t batch_size, size_t depth=32, object ref_map=None, np.dtype dtype=None, direct=DEFAULT_DIRECT):
+    def init_helper(self, size_t block_size, size_t batch_size, size_t depth=32, object ref_map=None, np.dtype dtype=None, cbool direct=DEFAULT_DIRECT, drop_gil=None):        
 
         self.batch_size = batch_size
         self.block_size = block_size
         self.event_manager = DirectEventManager(block_size, depth=depth) if direct else EventManager(depth=depth)
-        self.curr_posn = batch_size
-        self.curr_refs = None
-        self.curr_data = None
+        self.drop_gil = drop_gil if drop_gil is not None else direct
 
         self.ref_map = ref_map
         self.dtype = dtype
 
-    @boundscheck(False)
-    @wraparound(False)
-    cdef int enqueue(self, int fd, size_t posn, long long ref) nogil except *:
-        """
-        The user needs to keep track of when enough submissions have been made to fill a batch, otherwise
-        this call might release a completed batch before the user accesses it. See the example in :meth:`iter`.
+    def format_batch(self, refs, data):
 
-        :return: 0 on success, -PERR or -ERRNO on failure.
-        """
-
-        cdef int out
-
-        # Add a new batch if necessary
-        if self.curr_posn==self.batch_size:
-            out = self.event_manager.flush() # Wait for all pending writes before releasing the memory.
-            if out<0:
-                return out
-
-            with gil:
-                self.curr_refs = np.empty(self.batch_size, dtype=np.longlong)
-                self.curr_data = np.empty((self.batch_size, self.block_size), dtype=np.uint8)
-                self.curr_posn = 0
-
-        # Enqueue the request
-        out = self.event_manager.enqueue(fd, (&(self.curr_data[self.curr_posn,0])), self.block_size, posn)
-        if out<0:
-            return out
-
-        # Update refs
-        self.curr_refs[self.curr_posn] = ref
-        self.curr_posn+=1
-
-        return out
-
-
-    def retrieve_batch(self):
-
-        refs = np.asarray(self.curr_refs)
-        data = np.asarray(self.curr_data)
-        self.curr_refs = None
-        self.curr_data = None
-
-        if self.curr_posn>=0:
-            refs = refs[:self.curr_posn]
-            data = data[:self.curr_posn, :]
+        refs = np.asarray(refs)
+        data = np.asarray(data)
 
         #
         if self.dtype is not None:
@@ -438,45 +397,67 @@ cdef class RAIOBatchReader:
 
         return refs, data
 
+    @boundscheck(False)
+    @wraparound(False)
+    cdef int build_batch(self, BaseReadInputIter read_input_iter, long long[:] refs, char[:,:] data) nogil except *:
+        cdef size_t block_count=0, k=0
+        cdef int out=0
+        cdef FilePosn fposn
+        
+        for k in range(self.batch_size):
+            fposn = read_input_iter.next()            
+            if fposn.fd<0:
+                break
+            else:
+                # Udate data
+                out = self.event_manager.enqueue(fposn.fd, &(data[k,0]), self.block_size, fposn.posn)
+                if out<0:
+                    return out
+
+                # Update refs
+                refs[k] = fposn.key_id
+                block_count+=1
+
+        out = self.event_manager.flush()
+        if out<0:
+            return out
+        
+        return block_count
+        
+    
     def iter(self, input_iter : Union[Iterable[Union[Tuple[int,int],Tuple[int,int,int]]], BaseReadInputIter]):
         """ Iterates over batches assembled from the input iterator. The input iterator can be a ``BaseReadInputIrer``-derived type (for greater efficiency),
         or a python iterable over ``(fd,posn)`` or ``(fd,posn,ref)`` tuples."""
 
         cdef BaseReadInputIter read_input_iter
+        cdef long long[:] refs = None
+        cdef char[:,:] data = None
 
         if isinstance(input_iter, BaseReadInputIter):
             read_input_iter = input_iter
         else:
             read_input_iter = ReadInputIterWrapper(input_iter)
 
-        cdef int out=0
-        cdef size_t k
-        cdef int stop_iter = 0
-        cdef FilePosn fposn
+        cdef long long block_count=self.batch_size       
+                
 
-        while stop_iter == 0:
-
+        while block_count==<long long>self.batch_size:
+            
             # Build one batch
-            #with nogil:
-            for k in range(self.batch_size):
-                fposn = read_input_iter.next()
-                if fposn.fd<0:
-                    stop_iter = 1
-                    break
-                else:
-                    out = self.enqueue(fposn.fd, fposn.posn, fposn.key_id)
-                    if out<0:
-                        break
-            if out>=0:
-                out = self.event_manager.flush()
+            refs = np.empty(self.batch_size, dtype=np.longlong)
+            data = np.empty((self.batch_size, self.block_size), dtype=np.uint8)
 
+            if self.drop_gil:
+                with nogil:            
+                    block_count = self.build_batch(read_input_iter, refs, data)
+            else:
+                block_count = self.build_batch(read_input_iter, refs, data)
 
             # Yield one batch or return error
-            if out < 0:
-                self.do_raise(out)
-            elif self.curr_data is not None and self.curr_posn > 0:
-                yield self.retrieve_batch()
-
+            if block_count < 0:
+                self.do_raise(block_count)
+            elif block_count > 0:
+                yield self.format_batch(refs[:block_count], data[:block_count, :])
 
     def do_raise(self, int err_no):
         if self.event_manager.error_string.size()>0:

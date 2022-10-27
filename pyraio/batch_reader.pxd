@@ -3,6 +3,7 @@ from libcpp.string cimport string
 from . cimport liburing
 import numpy as np
 cimport numpy as np
+from .read_input_iter cimport BaseReadInputIter
 
 np.import_array()
 
@@ -16,11 +17,9 @@ cdef class RAIOBatchReader:
     cdef BaseEventManager event_manager
     cdef size_t block_size
     cdef size_t batch_size
-    cdef size_t curr_posn
-    cdef long long[:] curr_refs
-    cdef char[:,:] curr_data
+    cdef cbool drop_gil
 
     cdef object ref_map
     cdef np.dtype dtype
 
-    cdef int enqueue(self, int fd, size_t posn, long long ref) nogil except *
+    cdef int build_batch(self, BaseReadInputIter read_input_iter, long long[:] refs, char[:,:] data) nogil except *
