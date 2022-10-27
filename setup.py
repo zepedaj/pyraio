@@ -14,10 +14,7 @@ setup(
                 libraries=["aio", "uring"],
                 define_macros=[("NPY_NO_DEPRECATED_API", "NPY_1_7_API_VERSION")],
             )
-            for _mdl in [
-                "batch_reader",
-                "read_input_iter",
-            ]
+            for _mdl in ["batch_reader", "read_input_iter", "event_managers"]
         ],
         annotate=True,
         language_level="3",

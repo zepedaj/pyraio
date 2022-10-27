@@ -4,13 +4,10 @@ from . cimport liburing
 import numpy as np
 cimport numpy as np
 from .read_input_iter cimport BaseReadInputIter
+from .event_managers cimport BaseEventManager
 
 np.import_array()
 
-cdef class BaseEventManager:
-    cdef string error_string
-    cdef int flush(self) nogil
-    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=?) nogil except *
 
 cdef class RAIOBatchReader:
 
