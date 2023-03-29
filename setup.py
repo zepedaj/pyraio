@@ -19,6 +19,7 @@ setup(
         annotate=True,
         language_level="3",
     ),
+    zip_safe=False,
     version="0.1.0",
     description="",
     author="Joaquin Zepeda",
