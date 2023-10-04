@@ -142,19 +142,17 @@ def get_arg_by_name(name, *args, **kwargs):
     sgntr = signature(RAIOBatchReader.init_helper)
     return sgntr.bind_partial(None, *args, **kwargs).arguments[name]
 
-def raio_batch_read(input_iter, *args, **kwargs):
+def raio_batch_read(input_iter, *args, direct=None, **kwargs):
     """
     Automatically chooses between threaded / non-threaded readers based the value of ``direct`` (a threaded reader is used when ``direct=True``).
     See :clas:`RAIOBatchRead` for a description of all arguments.
     """
-    try:
-        direct = get_arg_by_name('direct', *args, **kwargs)
-    except KeyError:
+    if direct is None:
         direct = DEFAULT_DIRECT
     if not direct:
-        return raio_batch_read__non_threaded(input_iter, *args, **kwargs)
+        return raio_batch_read__non_threaded(input_iter, *args, direct=direct, **kwargs)
     else:
-        return raio_batch_read__threaded(input_iter, *args, **kwargs)
+        return raio_batch_read__threaded(input_iter, *args, direct=direct, **kwargs)
 
 def raio_batch_read__non_threaded(input_iter, *args, **kwargs):
     """
