@@ -69,7 +69,7 @@ cdef class RAIOBatchReader:
 
     @boundscheck(False)
     @wraparound(False)
-    cdef int build_batch(self, BaseReadInputIter read_input_iter, long long[:] refs, char[:,:] data) nogil except *:
+    cdef int build_batch(self, BaseReadInputIter read_input_iter, long long[:] refs, char[:,:] data) except * nogil:
         cdef size_t block_count=0, k=0
         cdef int out=0
         cdef FilePosn fposn

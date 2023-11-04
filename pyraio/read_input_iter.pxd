@@ -6,7 +6,7 @@ cdef struct FilePosn:
     int key_id
 
 cdef class BaseReadInputIter:
-    cdef FilePosn next(self) nogil except *
+    cdef FilePosn next(self) except * nogil
 
 cdef class ReadInputIterWrapper(BaseReadInputIter):
     cdef object source_iterator
@@ -20,4 +20,4 @@ cdef class ReadInputIterChunk(BaseReadInputIter):
     cdef int posn
     cdef vector[FilePosn] file_posns
 
-    cdef void populate(self, BaseReadInputIter read_input_iter, int chunk_size) nogil except *
+    cdef void populate(self, BaseReadInputIter read_input_iter, int chunk_size) except * nogil

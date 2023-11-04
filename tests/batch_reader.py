@@ -23,7 +23,6 @@ def DataFile(size=2**20, rng=None, flags=os.O_RDONLY):
     size = int(size)
     rng = rng or np.random.default_rng()
     with NamedTemporaryFile(mode="wb") as fo:
-
         #
         arr = np.empty(size, dtype="u1")
         arr[:] = rng.integers(256, size=size)
@@ -47,7 +46,7 @@ class MyRef:
 class TestRAIOBatchReaderNonThreaded:
     flags = os.O_RDONLY
     raio_batch_read = lambda self, *args, **kwargs: mdl.raio_batch_read__non_threaded(
-        *args, **kwargs
+        *args, direct=False, **kwargs
     )
 
     def DataFile(self, **kwargs):
@@ -62,7 +61,6 @@ class TestRAIOBatchReaderNonThreaded:
             file_path,
             fd,
         ):
-
             NUM_READERS = 16
             if indices is None:
                 NUM_INDICES = None
@@ -92,14 +90,12 @@ class TestRAIOBatchReaderNonThreaded:
         do_assert=True,
         batch_size=1,
     ):
-
         # FULL_FILE_SIZE
         with self.DataFile(**(DataFile_kwargs or {})) as (
             arr,
             file_path,
             fd,
         ):
-
             NUM_READERS = 16
             if indices is None:
                 NUM_INDICES = None
@@ -202,7 +198,6 @@ class TestRAIOBatchReaderNonThreaded:
         import numpy as np
 
         with NamedTemporaryFile(mode="wb") as fo:
-
             # Write some data to the file.
             N = int(1e6)
             rng = np.random.default_rng()
@@ -263,7 +258,6 @@ class TestRAIOBatchReaderNonThreaded:
         npt.assert_array_equal(actual_dat, read_dat)
 
     def test_ref(self):
-
         NUM_READERS = 32
         block_size = 4096
 
@@ -303,7 +297,7 @@ class TestRAIOBatchReaderNonThreaded:
 
 class TestRAIOBatchReaderNonThreadedDirect(TestRAIOBatchReaderNonThreaded):
     flags = os.O_RDONLY | os.O_DIRECT
-    raio_batch_read = lambda self, *args, **kwargs: mdl.raio_batch_read__threaded(
+    raio_batch_read = lambda self, *args, **kwargs: mdl.raio_batch_read__non_threaded(
         *args, direct=True, **kwargs
     )
 
@@ -314,8 +308,13 @@ class TestRAIOBatchReaderNonThreadedDirect(TestRAIOBatchReaderNonThreaded):
 
 class TestRAIOBatchReaderThreaded(TestRAIOBatchReaderNonThreaded):
     flags = os.O_RDONLY
-    raio_batch_read = mdl.raio_batch_read__threaded
+    raio_batch_read = lambda self, *args, **kwargs: mdl.raio_batch_read__threaded(
+        *args, direct=False, **kwargs
+    )
 
 
-class TestRAIOBatchReaderThreadedDirect(TestRAIOBatchReaderThreaded):
+class TestRAIOBatchReaderThreadedDirect(TestRAIOBatchReaderNonThreadedDirect):
     flags = os.O_RDONLY
+    raio_batch_read = lambda self, *args, **kwargs: mdl.raio_batch_read__threaded(
+        *args, direct=True, **kwargs
+    )
