@@ -15,8 +15,8 @@ cpdef enum PERR:
 
 cdef class BaseEventManager:
     cdef string error_string
-    cdef int flush(self) nogil
-    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=?) nogil
+    cdef int flush(self) noexcept nogil
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=?) noexcept nogil
 
 ctypedef struct EventMeta:
     size_t num_bytes
@@ -36,11 +36,11 @@ cdef class EventManager(BaseEventManager):
     cdef cpp_vector[EventMeta] event_metas
     cdef cpp_deque[EventMeta *] available_event_metas
 
-    cdef inline int ensure_sqe_availability(self) nogil
-    cdef int submit(self) nogil
-    cdef int get_completed(self, cbool blocking=?, cbool check_num_bytes=?) nogil
-    cdef int get_all_completed(self, int min_num_events=?) nogil
-    cdef int flush(self) nogil
+    cdef inline int ensure_sqe_availability(self) noexcept nogil
+    cdef int submit(self) noexcept nogil
+    cdef int get_completed(self, cbool blocking=?, cbool check_num_bytes=?) noexcept nogil
+    cdef int get_all_completed(self, int min_num_events=?) noexcept nogil
+    cdef int flush(self) noexcept nogil
 
 cdef class DirectEventManager(EventManager):
     cdef size_t block_size
@@ -48,5 +48,5 @@ cdef class DirectEventManager(EventManager):
     cdef cpp_vector[char] memory
     cdef cpp_deque[void *] aligned_bufs
 
-    cdef size_t ceil(self, size_t ptr) nogil
-    cdef size_t floor(self, size_t ptr) nogil
+    cdef size_t ceil(self, size_t ptr) noexcept nogil
+    cdef size_t floor(self, size_t ptr) noexcept nogil

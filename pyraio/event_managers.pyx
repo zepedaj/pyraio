@@ -20,9 +20,9 @@ def err_str(val):
         return str(PERR(val))
 
 cdef class BaseEventManager:
-    cdef int flush(self) nogil:
+    cdef int flush(self) noexcept nogil:
         raise NotImplementedError('Abstract class.')
-    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) nogil:
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) noexcept nogil:
         raise NotImplementedError('Abstract class.')
 
 cdef class EventManager(BaseEventManager):
@@ -48,7 +48,7 @@ cdef class EventManager(BaseEventManager):
         if res != 0:
             raise Exception(f'Error initializing uring: {err_str(res)}.')
 
-    cdef inline int ensure_sqe_availability(self) nogil:
+    cdef inline int ensure_sqe_availability(self) noexcept nogil:
         cdef int out = 0
         # Ensure an SQE is available
         if self.num_submitted + self.num_pending == self.depth:
@@ -59,7 +59,7 @@ cdef class EventManager(BaseEventManager):
 
         return out
 
-    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) nogil:
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) noexcept nogil:
         """
         Adds a pending event to the submission queue. If the queue is full (i.e., if ``num_pending + num_submitted == depth``), a space is ensured
         by submitting all pending and getting at least one completed event.
@@ -97,7 +97,7 @@ cdef class EventManager(BaseEventManager):
         return 0 #Success
 
 
-    cdef int submit(self) nogil:
+    cdef int submit(self) noexcept nogil:
         """
         Submits all the events in the submission queue.
         """
@@ -120,7 +120,7 @@ cdef class EventManager(BaseEventManager):
         return 0
 
 
-    cdef int get_completed(self, cbool blocking=DEFAULT_BLOCKING, cbool check_num_bytes=DEFAULT_CHECK_NUM_BYTES) nogil:
+    cdef int get_completed(self, cbool blocking=DEFAULT_BLOCKING, cbool check_num_bytes=DEFAULT_CHECK_NUM_BYTES) noexcept nogil:
         """
         Retrieves the next completed event if available, or blocks until available. See also :meth:`get_all_completed`.
 
@@ -162,7 +162,7 @@ cdef class EventManager(BaseEventManager):
                 return cqe_ptr[0].res
 
 
-    cdef int get_all_completed(self, int min_num_events=1) nogil:
+    cdef int get_all_completed(self, int min_num_events=1) noexcept nogil:
         """
         Gets all the completed events that are availble, waiting for at least ``min_num_events`` (which can be set to 0). See also :meth:`get_completed`.
 
@@ -188,7 +188,7 @@ cdef class EventManager(BaseEventManager):
 
         return num_completed
 
-    cdef int flush(self) nogil:
+    cdef int flush(self) noexcept nogil:
         """ Submits all pending events, if any, and waits for the completion of all submitted events."""
 
         if self.num_pending>0:
@@ -256,14 +256,14 @@ cdef class DirectEventManager(EventManager):
             self.aligned_bufs.push_back(<void *>(self.ceil(<size_t>self.memory.data()) + k*aligned_block_size))
 
     @cdivision(True)
-    cdef size_t ceil(self, size_t ptr) nogil:
+    cdef size_t ceil(self, size_t ptr) noexcept nogil:
         return self.alignment * (ptr//self.alignment + (ptr%self.alignment>0))
 
     @cdivision(True)
-    cdef size_t floor(self, size_t ptr) nogil:
+    cdef size_t floor(self, size_t ptr) noexcept nogil:
         return self.alignment * (ptr//self.alignment)
 
-    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) nogil:
+    cdef int enqueue(self, int fd, void *buf, unsigned nbytes, liburing.__u64 offset, cbool skip_ensure_sqe_availability=DEFAULT_SKIP_ENSURE_SQE_AVAILABILITY) noexcept nogil:
 
         cdef size_t offset_floor, alignment_diff
 
@@ -293,7 +293,7 @@ cdef class DirectEventManager(EventManager):
 
         return out
 
-    cdef int get_completed(self, cbool blocking=DEFAULT_BLOCKING, cbool check_num_bytes=DEFAULT_CHECK_NUM_BYTES) nogil:
+    cdef int get_completed(self, cbool blocking=DEFAULT_BLOCKING, cbool check_num_bytes=DEFAULT_CHECK_NUM_BYTES) noexcept nogil:
         out = EventManager.get_completed(self, blocking, False)
         if out<0:
             return out

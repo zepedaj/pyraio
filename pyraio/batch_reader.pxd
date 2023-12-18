@@ -19,4 +19,4 @@ cdef class RAIOBatchReader:
     cdef object ref_map
     cdef np.dtype dtype
 
-    cdef int build_batch(self, BaseReadInputIter read_input_iter, long long[:] refs, char[:,:] data) except * nogil
+    cdef int build_batch(self, BaseReadInputIter read_input_iter, long long[:] refs, char[:,:] data) noexcept nogil

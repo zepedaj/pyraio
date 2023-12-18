@@ -6,7 +6,7 @@ cdef class BaseReadInputIter:
     """
     Classes can implement this interface to benefit from faster speeds when using :meth:`BatchReader.iter`.
     """
-    cdef FilePosn next(self) except * nogil:
+    cdef FilePosn next(self) noexcept nogil:
         with gil:
             raise NotImplementedError('Abstract method.')
 
@@ -35,7 +35,7 @@ cdef class BaseReadInputIter:
 cdef class ReadInputIterChunk(BaseReadInputIter):
     """ A chunk from a :class:`BaseReadInputIter` object that behaves in the same way and is used to parallelize random reads across threads."""
 
-    cdef void populate(self, BaseReadInputIter read_input_iter, int chunk_size) except * nogil:
+    cdef void populate(self, BaseReadInputIter read_input_iter, int chunk_size) noexcept nogil:
 
         cdef int curr_posn=0
         self.file_posns.resize(chunk_size)
@@ -48,7 +48,7 @@ cdef class ReadInputIterChunk(BaseReadInputIter):
                 curr_posn+=1
         self.posn = 0
 
-    cdef FilePosn next(self) except * nogil:
+    cdef FilePosn next(self) noexcept nogil:
         cdef FilePosn out
         if <size_t>self.posn>=self.file_posns.size():
             out.fd = -1
@@ -66,7 +66,7 @@ cdef class ReadInputIterWrapper(BaseReadInputIter):
         self.source_iterator = iter(iterator)
         self.default_ref = 0
 
-    cdef FilePosn next(self) except * nogil:
+    cdef FilePosn next(self) noexcept nogil:
 
         cdef FilePosn fl_posn
 
