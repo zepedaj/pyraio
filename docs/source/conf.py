@@ -20,6 +20,10 @@
 project = "pyraio"
 copyright = "2022, Joaquin Zepeda"
 author = "Joaquin Zepeda"
+
+# The full version, including alpha/beta/rc tags
+release = "0.1.0"
+
 from pyraio._docs import PROLOG
 
 # -- General configuration ---------------------------------------------------

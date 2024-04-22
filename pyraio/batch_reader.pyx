@@ -162,7 +162,7 @@ def raio_batch_read__non_threaded(input_iter, *args, **kwargs):
     return rbr.iter(input_iter)
 
 from concurrent.futures import ThreadPoolExecutor
-from pglib.parallelization.threading import ThreadOutsourcedIterable
+from jztools.parallelization.threading import ThreadOutsourcedIterable
 def raio_batch_read__threaded(input_iter, *args, num_threads=2, job_queue_size=4, batches_per_job=1, **kwargs):
     """
     Creates chunks of the input iter and processes chunks using various threads. Each chunk (except possibly the last) has a multiple of batch size samples.

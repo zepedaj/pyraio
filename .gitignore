@@ -1,3 +1,8 @@
 *.c
 *.cpp
 *.html
+build/
+dist/
+*.egg-info
+__pycache__/
+*.so

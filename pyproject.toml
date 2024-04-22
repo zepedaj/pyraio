@@ -1,0 +1,28 @@
+
+[build-system]
+requires = ["wheel", "cython", 'setuptools', 'numpy']
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "pyraio"
+version = "0.1.0"
+authors = [
+  { name="Joaquin Zepeda", email="jazs.pro@gmail.com" },
+]
+dependencies=['jztools', 'numpy']
+description = "Pyraio: SSD random IO"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Linux",
+]
+
+[project.urls]
+Homepage = "https://github.com/zepedaj/pyraio"
+Issues = "https://github.com/zepedaj/pyraio/issues"
+
+[tool.distutils.bdist_wheel]
+universal = false

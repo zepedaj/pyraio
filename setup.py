@@ -5,7 +5,8 @@ from Cython.Build import cythonize
 import numpy as np
 
 setup(
-    name="pyraio",
+    # name="pyraio",
+    # install_requires=["jztools", "cython"],
     ext_modules=cythonize(
         [
             Extension(
@@ -20,8 +21,11 @@ setup(
         language_level="3",
     ),
     zip_safe=False,
-    version="0.1.0",
-    description="",
-    author="Joaquin Zepeda",
+    # version="0.1.0",
+    # author="Joaquin Zepeda",
     include_dirs=[np.get_include()],
+    # description="Pyraio: SSD random io",
+    # long_description=long_description,
+    # long_description_content_type="text/markdown",
+    # url="https://github.com/zepedaj/pyraio",
 )
